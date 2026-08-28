@@ -49,7 +49,10 @@
         if (item.numTurns != null) meta.push(item.numTurns + ' turn' + (item.numTurns === 1 ? '' : 's'));
         if (item.durationMs != null) meta.push(fmtDuration(item.durationMs));
         const head = (item.ok ? 'done' : 'ended with an error') + (meta.length ? '  ·  ' + meta.join('  ·  ') : '');
-        return { cls: item.ok ? 'ln-done' : 'ln-done bad', text: head, body: String(item.text || '') };
+        // The answer is already streamed as an assistant line above, so the
+        // result line is just a summary. Only carry text when the run errored
+        // (an error result may hold text that was never streamed).
+        return { cls: item.ok ? 'ln-done' : 'ln-done bad', text: head, body: item.ok ? '' : String(item.text || '') };
       }
       case 'log':
         return { cls: 'ln-log', text: String(item.text || '') };

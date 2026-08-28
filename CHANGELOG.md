@@ -2,6 +2,14 @@
 
 All notable changes to Agentyard are recorded here.
 
+## 0.4.1
+
+- **Run feed fixes.** A finished run no longer prints its answer twice (the
+  result line is now just a summary — `done · N turns · duration`; the answer
+  stays the streamed assistant line above it). Only one `session <id>` line per
+  run instead of one per `claude` system record. `claude -p` no longer prints
+  "no stdin data received in 3s" — the child's stdin is closed on spawn.
+
 ## 0.4.0
 
 - **Run Claude Code from the panel.** A header toggle switches between the

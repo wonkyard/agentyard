@@ -529,6 +529,13 @@ class RunController {
     }
     this.child = child;
 
+    // The prompt is passed as an argv (`-p "<prompt>"`) and nothing is piped
+    // in, so close stdin immediately — otherwise `claude -p` waits on it and
+    // prints "no stdin data received in 3s" to stderr.
+    if (child.stdin) {
+      try { child.stdin.end(); } catch (e) { /* ignore */ }
+    }
+
     let sawData = false;
     child.on('error', (err) => {
       if (this.child !== child) return;

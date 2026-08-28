@@ -542,8 +542,21 @@ check('no legacy identifiers in shipped code', legacy.length === 0, legacy.join(
   // run.js pure formatter
   check('run.describe: tool item -> "→ Name: summary"',
     win.AY.run.describe({ kind: 'tool', name: 'Bash', summary: 'npm test' }).text === '→ Bash: npm test');
-  check('run.describe: result carries head + body',
-    win.AY.run.describe({ kind: 'result', ok: true, text: 'all good', numTurns: 2 }).body === 'all good');
+  check('run.describe: a successful result is a summary line with no body (answer already streamed)',
+    win.AY.run.describe({ kind: 'result', ok: true, text: 'all good', numTurns: 2 }).body === '' &&
+    /done/.test(win.AY.run.describe({ kind: 'result', ok: true, text: 'all good', numTurns: 2 }).text));
+  check('run.describe: an error result still carries its text as the body',
+    win.AY.run.describe({ kind: 'result', ok: false, text: 'boom' }).body === 'boom');
+
+  // one 'system' feed item per run even when claude emits several system records
+  const pSys = new StreamJsonParser();
+  const sysItems = pSys.push(
+    '{"type":"system","subtype":"init","session_id":"s1","model":"m","tools":["a","b"]}\n' +
+    '{"type":"system","subtype":"info","session_id":"s1"}\n' +
+    '{"type":"system","subtype":"info","session_id":"s1"}\n'
+  );
+  check('streamJson: only the first (init) system record becomes a feed item',
+    sysItems.filter((i) => i.kind === 'system').length === 1 && sysItems[0].tools === 2);
 }
 
 // --- 13. run view: Cancel kills the whole process tree --------------

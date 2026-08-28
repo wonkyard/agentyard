@@ -89,6 +89,12 @@ function recordToItems(rec, state) {
   if (rec.session_id && typeof rec.session_id === 'string') state.sessionId = rec.session_id;
 
   if (type === 'system') {
+    // `claude -p --verbose` emits several system records per run (init, then
+    // info/status subtypes). Only the first (init) carries model + tool count
+    // and it is all the feed needs — later ones would just repeat the session
+    // line, so drop them.
+    if (state.systemEmitted) return out;
+    state.systemEmitted = true;
     out.push({
       kind: 'system',
       sessionId: rec.session_id || state.sessionId || null,
@@ -149,7 +155,7 @@ function recordToItems(rec, state) {
 class StreamJsonParser {
   constructor() {
     this.buf = '';
-    this.state = { sessionId: null };
+    this.state = { sessionId: null, systemEmitted: false };
   }
 
   get sessionId() {
