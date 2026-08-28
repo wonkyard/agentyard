@@ -14,7 +14,8 @@ html, body {
   padding: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: "Courier New", ui-monospace, monospace;
+  font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas,
+    "DejaVu Sans Mono", monospace;
   height: 100%;
   overflow: hidden;
 }
@@ -36,14 +37,16 @@ html, body {
   border-bottom: 1px solid var(--line);
 }
 
+/* The canvas backing store is rendered at 2-3x (see main.js SS), so letting the
+   browser scale it DOWN to the panel width keeps text crisp. Do NOT force
+   `image-rendering: pixelated` here — on a fractional scale it shreds the text.
+   Sprite crispness is preserved by drawing integer rects at the supersampled
+   resolution instead. */
 #scene {
   display: block;
   width: 100%;
-  min-width: 560px;
-  max-width: 1100px;
+  max-width: 840px;
   height: auto;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
   cursor: pointer;
 }
 
@@ -56,7 +59,7 @@ body:not(.panel) #scene { margin: 0 auto; }
 html.shot, html.shot body { overflow: visible; height: auto; }
 html.shot #app { display: block; height: auto; padding: 0; }
 html.shot #stage-wrap { overflow: visible; height: auto; border: 0; }
-html.shot #scene { width: 840px; min-width: 0; max-width: none; }
+html.shot #scene { width: 840px; max-width: none; }
 html.shot #status { display: none; }
 
 #status {

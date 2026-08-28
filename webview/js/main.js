@@ -10,6 +10,11 @@
   const panel = document.getElementById('panel');
   const statusEl = document.getElementById('status');
 
+  // Supersample: render the scene at SS× the logical size and let the browser
+  // scale the canvas element down to the panel width. This is what keeps small
+  // text readable — a 1× canvas scaled by CSS turns 9px labels to mush.
+  const SS = 2;
+
   const view = { selectedId: null };
   let office = null;
   let hits = [];
@@ -19,6 +24,22 @@
     return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
     }[c]));
+  }
+
+  function wrapText(c, text, x, y, maxW, lh) {
+    const words = String(text).split(/\s+/);
+    let line = '';
+    for (const w of words) {
+      const test = line ? line + ' ' + w : w;
+      if (c.measureText(test).width > maxW && line) {
+        c.fillText(line, x, y);
+        y += lh;
+        line = w;
+      } else {
+        line = test;
+      }
+    }
+    if (line) c.fillText(line, x, y);
   }
 
   function relTime(ts) {
@@ -57,8 +78,8 @@
     const rect = canvas.getBoundingClientRect();
     const sx = canvas.width / rect.width;
     const sy = canvas.height / rect.height;
-    const x = (ev.clientX - rect.left) * sx;
-    const y = (ev.clientY - rect.top) * sy;
+    const x = (ev.clientX - rect.left) * sx / SS;
+    const y = (ev.clientY - rect.top) * sy / SS;
     let found = null;
     for (let i = hits.length - 1; i >= 0; i--) {
       const h = hits[i];
@@ -121,25 +142,38 @@
   function frame() {
     const t = performance.now();
     if (office) {
+      ctx.setTransform(SS, 0, 0, SS, 0, 0);
       const out = AY.render.render(ctx, office, t, view);
-      if (canvas.width !== out.width || canvas.height !== out.height) {
-        canvas.width = out.width;
-        canvas.height = out.height;
+      const w = Math.round(out.width * SS);
+      const h = Math.round(out.height * SS);
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+        ctx.setTransform(SS, 0, 0, SS, 0, 0);
         AY.render.render(ctx, office, t, view);
       }
       hits = out.hits;
-    } else if (!lastError) {
+    } else {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.fillStyle = '#12141c';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#9aa0b4';
-      ctx.font = '13px "Courier New", monospace';
-      ctx.fillText('loading Agentyard…', 20, 24);
+      ctx.font = '16px ui-monospace, Consolas, monospace';
+      if (lastError) {
+        ctx.fillStyle = '#ff6b6b';
+        ctx.fillText('Agentyard error:', 20, 32);
+        ctx.fillStyle = '#e0a0a0';
+        const msg = String(lastError && lastError.message || lastError);
+        wrapText(ctx, msg, 20, 58, canvas.width - 40, 22);
+      } else {
+        ctx.fillStyle = '#9aa0b4';
+        ctx.fillText('loading Agentyard…', 20, 30);
+      }
     }
     requestAnimationFrame(frame);
   }
 
-  canvas.width = AY.render.WIDTH;
-  canvas.height = 600;
+  canvas.width = AY.render.WIDTH * SS;
+  canvas.height = 600 * SS;
   setStatus('connecting…');
   poll();
   setInterval(poll, POLL_MS);

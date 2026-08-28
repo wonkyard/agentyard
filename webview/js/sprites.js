@@ -171,9 +171,9 @@
 
   // Thought bubble carrying the agent's note, wrapped to <= 2 lines.
   function drawThought(ctx, cx, baseY, text, t) {
-    ctx.font = '7px "Courier New", monospace';
+    ctx.font = '8px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
     ctx.textBaseline = 'top';
-    const maxW = 96;
+    const maxW = 104;
     const words = String(text || '').split(/\s+/).filter(Boolean);
     const lines = [];
     let cur = '';
@@ -196,7 +196,7 @@
       lines[lines.length - 1] = last + '…';
     }
     const bw = Math.max(16, ...lines.map((l) => ctx.measureText(l).width)) + 10;
-    const bh = lines.length * 8 + 7;
+    const bh = lines.length * 9 + 7;
     const bx = Math.round(cx - bw / 2);
     const by = Math.round(baseY - bh);
     px(ctx, bx, by, bw, bh, P.bubble);
@@ -208,7 +208,7 @@
     px(ctx, cx - 1, by + bh, 3, 3, P.bubble);
     px(ctx, cx - 2, by + bh + 3, 2, 2, P.bubble);
     ctx.fillStyle = P.bubbleText;
-    lines.forEach((l, i) => ctx.fillText(l, bx + 5, by + 4 + i * 8));
+    lines.forEach((l, i) => ctx.fillText(l, bx + 5, by + 4 + i * 9));
     // animated typing dots in the corner
     const n = Math.floor(t / 240) % 3;
     for (let i = 0; i < 3; i++) {
