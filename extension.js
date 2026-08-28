@@ -4,8 +4,13 @@ const vscode = require('vscode');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const cp = require('child_process');
 const { toDepartments } = require('./shared/frontmatter.js');
 const hooksConfig = require('./shared/hooksConfig.js');
+const { buildClaudeArgs, candidateCommands } = require('./shared/claudeArgs.js');
+const { needsCmdWrap, resolveLauncher } = require('./shared/winWrap.js');
+const { StreamJsonParser } = require('./shared/streamJson.js');
+const { killTree, spawnGroupOpts } = require('./shared/killTree.js');
 
 function nonce() {
   let s = '';
@@ -19,9 +24,36 @@ function workspaceRoot() {
   return f && f.length ? f[0].uri.fsPath : null;
 }
 
-const HOOK_SCRIPT = path.join(__dirname, 'hooks', 'agentyard-hook.mjs');
+// The hook script ships inside the extension folder (which VS Code names by
+// version), so we never point settings.json at it directly — see installHook().
+const BUNDLED_HOOK = path.join(__dirname, 'hooks', 'agentyard-hook.mjs');
+const AGENTYARD_DIR = path.join(os.homedir(), '.claude', 'agentyard');
+const HOOK_SCRIPT = path.join(AGENTYARD_DIR, 'agentyard-hook.mjs');
 const USER_SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
-const EVENTS_DIR = path.join(os.homedir(), '.claude', 'agentyard');
+const EVENTS_DIR = AGENTYARD_DIR;
+
+const PRUNE_INTERVAL_MS = 5 * 60 * 1000; // housekeeping cadence for the event log
+const STALE_FILE_MS = 2 * 60 * 60 * 1000; // silence after which an events file is dead
+
+// Copy the bundled hook to a stable, version-independent path so an extension
+// update never leaves settings.json pointing at a folder VS Code has removed.
+// Re-copy whenever the bundled script is newer than the installed one.
+function installHook() {
+  try {
+    fs.mkdirSync(AGENTYARD_DIR, { recursive: true });
+    let need = true;
+    try {
+      const src = fs.statSync(BUNDLED_HOOK);
+      const dst = fs.statSync(HOOK_SCRIPT);
+      need = src.mtimeMs > dst.mtimeMs || src.size !== dst.size;
+    } catch (e) {
+      need = true;
+    }
+    if (need) fs.copyFileSync(BUNDLED_HOOK, HOOK_SCRIPT);
+  } catch (e) {
+    /* if this fails live mode just won't have a hook to point at */
+  }
+}
 
 const DEMO = {
   db: path.join(__dirname, 'dev-data', 'demo.db'),
@@ -66,6 +98,34 @@ function safeRead(p) {
   }
 }
 
+// Minimal PATH lookup for a bare command name (no shell).
+function whichSync(name) {
+  if (!name) return null;
+  if (path.isAbsolute(name) || /[\\/]/.test(name)) {
+    try { return fs.statSync(name).isFile() ? name : null; } catch (e) { return null; }
+  }
+  const dirs = String(process.env.PATH || process.env.Path || '').split(path.delimiter);
+  for (const d of dirs) {
+    if (!d) continue;
+    const p = path.join(d, name);
+    try { if (fs.statSync(p).isFile()) return p; } catch (e) { /* keep looking */ }
+  }
+  return null;
+}
+
+// Resolve a Windows `.cmd`/`.bat` launcher to the real executable it forwards
+// to, so we can spawn that directly with NO shell (cmd.exe is never involved,
+// so there is nothing to inject into). Returns null if the shim is not a
+// recognisable forwarder — the caller then refuses rather than run it unsafely.
+function resolveWinLauncher(command) {
+  return resolveLauncher(command, {
+    which: whichSync,
+    read: safeRead,
+    exists: (p) => fs.existsSync(p),
+    nodePath: process.execPath,
+  });
+}
+
 function readRoster(primaryDir) {
   const userDir = path.join(os.homedir(), '.claude', 'agents');
   const byName = new Map();
@@ -108,10 +168,13 @@ class LiveLog {
       /* watcher unavailable — poll still refreshes via scanAll on interval */
     }
     this.prune();
+    // Prune often, not hourly: a force-closed VS Code leaves events-*.jsonl
+    // files that never got a terminal event, and we want them gone before the
+    // next scanAll re-ingests a whole dead session.
     this.pruneTimer = setInterval(() => {
       this.prune();
       this.scanAll();
-    }, 60 * 60 * 1000);
+    }, PRUNE_INTERVAL_MS);
   }
 
   stop() {
@@ -195,7 +258,9 @@ class LiveLog {
       let drop = false;
       try {
         const st = fs.statSync(f);
-        if (now - st.mtimeMs > 24 * 60 * 60 * 1000) drop = true;
+        // A live session writes constantly. This many hours of silence means
+        // it is dead (force-closed / crashed) even without a terminal event.
+        if (now - st.mtimeMs > STALE_FILE_MS) drop = true;
       } catch (e) {
         continue;
       }
@@ -233,7 +298,37 @@ function hooksInstalled() {
   return candidates.some((p) => hooksConfig.textHasOurHooks(safeRead(p)));
 }
 
+// If live mode was turned on by an older build, its settings.json still points
+// at that build's version-named extension folder (which VS Code may have
+// deleted). Re-point it at the stable path. Runs on activation.
+function migrateHookPath() {
+  const scriptForCmd = HOOK_SCRIPT.replace(/\\/g, '/');
+  const targets = [USER_SETTINGS];
+  const root = workspaceRoot();
+  if (root) targets.push(path.join(root, '.claude', 'settings.json'));
+  for (const p of targets) {
+    let text = '';
+    try {
+      text = fs.readFileSync(p, 'utf8');
+    } catch (e) {
+      continue;
+    }
+    if (!hooksConfig.textHasOurHooks(text)) continue;
+    if (text.includes(scriptForCmd)) continue; // already stable
+    const parsed = hooksConfig.parseLenient(text);
+    if (text.trim() && text.trim() !== '{}' && Object.keys(parsed).length === 0) continue;
+    try {
+      fs.writeFileSync(p + '.agentyard-backup', text);
+      const merged = hooksConfig.mergeHooks(parsed, scriptForCmd);
+      fs.writeFileSync(p, JSON.stringify(merged, null, 2) + '\n');
+    } catch (e) {
+      /* leave it; enable/disable still work by marker */
+    }
+  }
+}
+
 async function enableLiveMode() {
+  installHook();
   const scriptForCmd = HOOK_SCRIPT.replace(/\\/g, '/');
   const block = hooksConfig.buildHooksBlock(scriptForCmd);
   const preview = JSON.stringify({ hooks: block }, null, 2);
@@ -318,6 +413,194 @@ async function disableLiveMode() {
   );
 }
 
+// ---- run Claude Code from the panel --------------------------------
+// One run at a time. Spawns `claude -p "<prompt>" --output-format stream-json
+// --verbose` with the user's existing CLI auth (no API key, no metered
+// billing). The prompt is always a spawn arg, never a shell string. stdout is
+// parsed to feed items and forwarded to the webview only — nothing is written
+// to disk here.
+class RunController {
+  constructor(post) {
+    this.post = post; // (msg) => void, to the webview
+    this.child = null;
+    this.parser = null;
+    this.sessionId = null; // last claude session id, for --resume
+    this.running = false;
+    this.stderrBuf = '';
+  }
+
+  dispose() {
+    this.cancel();
+  }
+
+  pushStatus() {
+    this.post({
+      type: 'run',
+      event: 'status',
+      running: this.running,
+      sessionId: this.sessionId,
+      hasWorkspace: !!workspaceRoot(),
+    });
+  }
+
+  newThread() {
+    if (this.running) return;
+    this.sessionId = null;
+    this.pushStatus();
+  }
+
+  send(prompt, resume) {
+    if (this.running) {
+      this.post({ type: 'run', event: 'error', message: 'A run is already in progress.' });
+      return;
+    }
+    prompt = String(prompt == null ? '' : prompt);
+    if (!prompt.trim()) return;
+    const root = workspaceRoot();
+    if (!root) {
+      this.post({ type: 'run', event: 'error', message: 'Open a workspace folder first — runs use the folder as the working directory.' });
+      return;
+    }
+
+    const cfg = vscode.workspace.getConfiguration('agentyard');
+    let built;
+    try {
+      built = buildClaudeArgs({
+        claudePath: cfg.get('claudePath', 'claude'),
+        prompt,
+        resume: resume ? this.sessionId : null,
+        permissionMode: cfg.get('claudePermissionMode', 'default'),
+        extraArgs: cfg.get('claudeExtraArgs', []),
+      });
+    } catch (e) {
+      this.post({ type: 'run', event: 'error', message: 'Bad Agentyard run config: ' + e.message });
+      return;
+    }
+
+    const candidates = candidateCommands(built.command, process.platform);
+    this.parser = new StreamJsonParser();
+    this.stderrBuf = '';
+    this.running = true;
+    this.post({
+      type: 'run',
+      event: 'started',
+      prompt,
+      resumed: !!(resume && this.sessionId),
+      resumeId: resume ? this.sessionId : null,
+    });
+    this.pushStatus();
+    this._spawn(candidates, 0, built.args, root);
+  }
+
+  _spawn(candidates, i, args, cwd) {
+    if (i >= candidates.length) {
+      this._fail(
+        'Could not launch "' + candidates[0] + '". Set agentyard.claudePath to the Claude ' +
+        'Code CLI — on Windows point it at claude.exe or a full path to the real executable, ' +
+        'not a .cmd/.bat shim.'
+      );
+      return;
+    }
+    const command = candidates[i];
+    let file = command;
+    let spawnArgs = args;
+    const opts = { cwd, env: process.env, windowsHide: true, ...spawnGroupOpts(process.platform) };
+
+    if (needsCmdWrap(command, process.platform)) {
+      // There is no safe way to pass a prompt through cmd.exe, so we never do.
+      // Resolve the shim to the real executable it forwards to and spawn that
+      // directly (no shell). If it can't be resolved, skip this candidate — the
+      // exhaustion path below tells the user to set an explicit claudePath.
+      const resolved = resolveWinLauncher(command);
+      if (!resolved) {
+        this._spawn(candidates, i + 1, args, cwd);
+        return;
+      }
+      file = resolved.file;
+      spawnArgs = resolved.prefixArgs.concat(args);
+    }
+
+    let child;
+    try {
+      child = cp.spawn(file, spawnArgs, opts);
+    } catch (e) {
+      this._spawn(candidates, i + 1, args, cwd);
+      return;
+    }
+    this.child = child;
+
+    let sawData = false;
+    child.on('error', (err) => {
+      if (this.child !== child) return;
+      if (!sawData && (err.code === 'ENOENT' || err.code === 'EINVAL')) {
+        this.child = null;
+        this._spawn(candidates, i + 1, args, cwd);
+        return;
+      }
+      this._fail('claude process error: ' + err.message);
+    });
+
+    if (child.stdout) {
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (d) => {
+        sawData = true;
+        const items = this.parser.push(d);
+        if (this.parser.sessionId) this.sessionId = this.parser.sessionId;
+        for (const it of items) this.post({ type: 'run', event: 'item', item: it });
+        if (items.length) this.pushStatus();
+      });
+    }
+    if (child.stderr) {
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (d) => {
+        this.stderrBuf = (this.stderrBuf + d).slice(-4000);
+        this.post({ type: 'run', event: 'stderr', text: String(d).replace(/\s+$/, '') });
+      });
+    }
+
+    child.on('close', (code, signal) => {
+      if (this.child !== child) return;
+      const tail = this.parser ? this.parser.flush() : [];
+      if (this.parser && this.parser.sessionId) this.sessionId = this.parser.sessionId;
+      for (const it of tail) this.post({ type: 'run', event: 'item', item: it });
+      this.running = false;
+      this.child = null;
+      this.parser = null;
+      this.post({
+        type: 'run',
+        event: 'ended',
+        code: typeof code === 'number' ? code : null,
+        signal: signal || null,
+        sessionId: this.sessionId,
+        stderr: (code && this.stderrBuf.trim()) ? this.stderrBuf.trim().slice(-800) : null,
+      });
+      this.pushStatus();
+    });
+  }
+
+  _fail(message) {
+    this.running = false;
+    if (this.child) {
+      try { this.child.removeAllListeners(); } catch (e) { /* ignore */ }
+    }
+    this.child = null;
+    this.parser = null;
+    this.post({ type: 'run', event: 'error', message });
+    this.post({ type: 'run', event: 'ended', code: null, signal: null, sessionId: this.sessionId });
+    this.pushStatus();
+  }
+
+  cancel() {
+    const child = this.child;
+    if (!child) return;
+    this.post({ type: 'run', event: 'stderr', text: '^C cancelling…' });
+    killTree(child).then((ok) => {
+      if (!ok) this.post({ type: 'run', event: 'stderr', text: 'process may still be exiting' });
+    });
+    // the 'close' handler above emits 'ended' and clears state
+  }
+}
+
 // ---- webview -------------------------------------------------------
 function getHtml(webview, extUri) {
   const n = nonce();
@@ -337,7 +620,7 @@ function getHtml(webview, extUri) {
   ].join('; ');
 
   const scripts = ['vendor/sql-wasm.js', 'js/palette.js', 'js/sprites.js', 'js/db.js',
-    'js/adapter.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/main.js']
+    'js/adapter.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/run.js', 'js/main.js']
     .map((s) => `<script nonce="${n}" src="${asset(...s.split('/'))}"></script>`)
     .join('\n  ');
 
@@ -351,9 +634,33 @@ function getHtml(webview, extUri) {
 </head>
 <body class="panel">
   <div id="app">
-    <div id="stage-wrap"><canvas id="scene" width="840" height="600"></canvas></div>
-    <aside id="panel"></aside>
-    <div id="status">connecting…</div>
+    <header id="topbar">
+      <span class="brand">AGENTYARD<span class="ver">v0.4</span></span>
+      <span id="view-toggle">
+        <button type="button" data-view="office" class="on">Office</button>
+        <button type="button" data-view="run">Run</button>
+      </span>
+    </header>
+    <div id="office-pane">
+      <div id="stage-wrap"><canvas id="scene" width="840" height="600"></canvas></div>
+      <aside id="panel"></aside>
+      <div id="status">connecting…</div>
+    </div>
+    <div id="run-pane" hidden>
+      <div id="run-feed"></div>
+      <div id="run-bar">
+        <div id="run-hint" hidden></div>
+        <div id="run-input-row">
+          <textarea id="run-input" rows="1" placeholder="Send a prompt to Claude Code in this workspace…"></textarea>
+          <button type="button" id="run-send">Send</button>
+          <button type="button" id="run-cancel" hidden>Cancel</button>
+        </div>
+        <div id="run-foot">
+          <button type="button" id="run-new">New thread</button>
+          <span id="run-meta"></span>
+        </div>
+      </div>
+    </div>
   </div>
   <script nonce="${n}">
     window.AY_CONFIG = { mode: 'vscode', pollSeconds: ${JSON.stringify(cfg.get('pollSeconds', 3))}, wasmUrl: ${JSON.stringify(wasmUrl)} };
@@ -381,6 +688,7 @@ function collectSnapshot(live) {
     liveEvents: live ? live.recent() : [],
     hooksInstalled: hooksInstalled(),
     idleSeconds: cfg.get('idleSeconds', 30),
+    staleMinutes: cfg.get('staleMinutes', 15),
     maxSpritesPerRoom: cfg.get('maxSpritesPerRoom', 8),
     nowMs: Date.now(),
   };
@@ -393,6 +701,9 @@ class OfficeViewProvider {
     this.timer = null;
     this.watchers = [];
     this.live = new LiveLog(() => this.pushData());
+    this.run = new RunController((m) => {
+      if (this.view) this.view.webview.postMessage(m);
+    });
   }
 
   pushData() {
@@ -412,6 +723,7 @@ class OfficeViewProvider {
   dispose() {
     this.stop();
     this.live.stop();
+    this.run.dispose();
   }
 
   startWatchers() {
@@ -454,6 +766,12 @@ class OfficeViewProvider {
           vscode.commands.executeCommand(msg.command);
         }
       }
+      if (msg.type === 'run') {
+        if (msg.action === 'send') this.run.send(msg.prompt, !!msg.resume);
+        else if (msg.action === 'cancel') this.run.cancel();
+        else if (msg.action === 'new') this.run.newThread();
+        else if (msg.action === 'status') this.run.pushStatus();
+      }
     });
 
     webviewView.onDidChangeVisibility(() => {
@@ -471,6 +789,8 @@ class OfficeViewProvider {
 }
 
 function activate(context) {
+  installHook();
+  migrateHookPath();
   const provider = new OfficeViewProvider(context);
   provider.live.start();
 

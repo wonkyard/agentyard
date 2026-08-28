@@ -4,9 +4,12 @@ node_modules/**
 scripts/**
 reports/**
 dev-data/real/**
+dev-data/*.jsonl
 media/screenshots/*.psd
 **/*.map
 *.vsix
+**/*.backup
+**/*.agentyard-backup
 .gitignore
 .vscodeignore
 .eslintrc*

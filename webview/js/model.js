@@ -24,10 +24,13 @@
     const idleSeconds = raw.idleSeconds || 30;
     const maxPerRoom = raw.maxSpritesPerRoom || 8;
     const hooksInstalled = !!raw.hooksInstalled;
+    const staleMs = raw.staleMs != null
+      ? raw.staleMs
+      : (raw.staleMinutes != null ? raw.staleMinutes * 60000 : undefined);
 
     // ---- live activity ------------------------------------------------
     const live = root.AY && root.AY.live
-      ? root.AY.live.resolve(raw.liveEvents || [], { nowMs, idleSeconds })
+      ? root.AY.live.resolve(raw.liveEvents || [], { nowMs, idleSeconds, staleMs })
       : { agents: [], sessions: [], agentTypes: [], lastActivityMs: 0, counts: {}, hasEvents: false };
 
     // fastest-changing live agent per subagent type, for department overlay

@@ -97,7 +97,7 @@
     const tw = ctx.measureText('AGENTYARD').width;
     ctx.font = '9px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
     ctx.fillStyle = P.textDim;
-    ctx.fillText('v0.3', MARGIN + tw + 8, 12);
+    ctx.fillText('v0.4', MARGIN + tw + 8, 12);
 
     // --- data-mode pill (row 2, left) ---
     let pillHit = null;

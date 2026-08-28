@@ -16,6 +16,10 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { toDepartments } = require('../shared/frontmatter.js');
 const hooksConfig = require('../shared/hooksConfig.js');
+const { buildClaudeArgs, candidateCommands } = require('../shared/claudeArgs.js');
+const { needsCmdWrap, parseCmdShim, tokenizeCmdLine, resolveLauncher } = require('../shared/winWrap.js');
+const { StreamJsonParser } = require('../shared/streamJson.js');
+const { killTree, isAlive } = require('../shared/killTree.js');
 const initSqlJs = require('sql.js');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -40,6 +44,11 @@ function readAgentDir(dir) {
 check('dev-data/demo.db present', fs.existsSync(path.join(DD, 'demo.db')));
 check('dev-data/agents present', fs.existsSync(path.join(DD, 'agents')));
 check('dev-data/team present', fs.existsSync(path.join(DD, 'team')));
+check('dev-data/zombie-session.jsonl present', fs.existsSync(path.join(DD, 'zombie-session.jsonl')));
+check('zombie fixture is synthetic (no real user paths / session id)', (() => {
+  const t = fs.readFileSync(path.join(DD, 'zombie-session.jsonl'), 'utf8');
+  return !/[A-Za-z]:\\Users\\/.test(t) && !/b178cf9a/.test(t);
+})());
 
 // --- 1. frontmatter -> departments -------------------------------------
 const departments = readAgentDir(path.join(DD, 'agents'));
@@ -77,13 +86,21 @@ check('annex projects have repo_url', annexCount === 2, annexCount + ' annexes')
 check('latest-status rows read', statuses.length >= 5, statuses.length + ' rows');
 
 // --- 3. load browser modules with a fake window ---------------------
-const win = { addEventListener() {}, performance: { now: () => 0 } };
+const stubNode = () => ({ style: {}, dataset: {}, classList: { add() {}, remove() {}, toggle() {} },
+  addEventListener() {}, appendChild() {}, querySelectorAll: () => [], querySelector: () => null,
+  closest: () => null, textContent: '', hidden: false });
+const win = {
+  addEventListener() {}, performance: { now: () => 0 },
+  document: { getElementById: () => null, createElement: stubNode, querySelector: () => null,
+    querySelectorAll: () => [], addEventListener() {} },
+};
 win.window = win;
-for (const f of ['js/palette.js', 'js/sprites.js', 'js/live.js', 'js/model.js', 'js/render.js']) {
+for (const f of ['js/palette.js', 'js/sprites.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/run.js']) {
   const code = fs.readFileSync(path.join(EXT_ROOT, 'webview', f), 'utf8');
-  new Function('window', 'self', 'globalThis', 'module', code)(win, win, win, undefined);
+  new Function('window', 'self', 'globalThis', 'module', 'document', code)(win, win, win, undefined, win.document);
 }
 check('webview namespace is AY', !!win.AY && !!win.AY.render && !!win.AY.sprites && !!win.AY.live);
+check('run view module loaded', !!win.AY.run && typeof win.AY.run.describe === 'function');
 const office = win.AY.model.build(
   { departments, teamRoles, dataMode: 'demo' },
   { projects, statuses }
@@ -145,6 +162,13 @@ const views = ((pkg.contributes || {}).views || {}).agentyard || [];
 check('webview view "agentyard.office"', views.some((v) => v.id === 'agentyard.office' && v.type === 'webview'));
 const cmds = ((pkg.contributes || {}).commands || []).map((c) => c.command);
 check('agentyard.focus command present', cmds.includes('agentyard.focus'));
+const cfgProps = (((pkg.contributes || {}).configuration || {}).properties) || {};
+check('run-view config props declared',
+  !!cfgProps['agentyard.claudePath'] && !!cfgProps['agentyard.claudeExtraArgs'] &&
+  !!cfgProps['agentyard.claudePermissionMode']);
+check('claudePermissionMode default is not a skip-permissions mode',
+  cfgProps['agentyard.claudePermissionMode'].default === 'default');
+check('package version is 0.4.x', /^0\.4\./.test(pkg.version), pkg.version);
 // needles assembled from parts so this test file itself stays grep-clean
 const OLD_NAME = ['pixel', 'office'].join('-');
 const OLD_CFG = 'pixel' + 'Office';
@@ -155,7 +179,8 @@ check('no legacy config-key prefix', !JSON.stringify(pkg.contributes.configurati
 // --- 6. no legacy identifiers left in shipped code ----------------
 const shipped = ['extension.js', 'webview/index.html', 'webview/css/style.css',
   'webview/js/palette.js', 'webview/js/sprites.js', 'webview/js/db.js', 'webview/js/adapter.js',
-  'webview/js/model.js', 'webview/js/render.js', 'webview/js/main.js'];
+  'webview/js/model.js', 'webview/js/render.js', 'webview/js/run.js', 'webview/js/main.js',
+  'shared/claudeArgs.js', 'shared/winWrap.js', 'shared/streamJson.js', 'shared/killTree.js'];
 let legacy = [];
 for (const f of shipped) {
   const txt = fs.readFileSync(path.join(EXT_ROOT, f), 'utf8');
@@ -246,6 +271,38 @@ check('no legacy identifiers in shipped code', legacy.length === 0, legacy.join(
   check('live: dataMode live when fresh', L.dataMode(r1, true, base + 10000) === 'live');
   check('live: dataMode watching when quiet', L.dataMode(r2, true, base + 300000) === 'watching');
   check('live: dataMode off without hooks', L.dataMode(r1, false, base + 10000) === 'off');
+
+  // ---- zombie horizon: an agent that never ended and went quiet is dropped ----
+  // A session force-closed mid-run never emits Stop / SessionEnd. Its events
+  // file ends on a PreToolUse. Long after, resolve() must not still render it.
+  const zEvents = [
+    { ts: iso(0), hook_event_name: 'SessionStart', session_id: 'z1', cwd: '/w/app' },
+    { ts: iso(1), hook_event_name: 'UserPromptSubmit', session_id: 'z1', cwd: '/w/app' },
+    { ts: iso(2), hook_event_name: 'SubagentStart', session_id: 'z1', agent_id: 'zs', agent_type: 'Explore' },
+    { ts: iso(3), hook_event_name: 'PreToolUse', session_id: 'z1', agent_id: 'zs', agent_type: 'Explore', tool_name: 'Grep', tool_input_summary: 'x' },
+    { ts: iso(5), hook_event_name: 'PreToolUse', session_id: 'z1', cwd: '/w/app', tool_name: 'Edit', tool_input_summary: 'a.ts' },
+  ];
+  const zSoon = L.resolve(zEvents, { nowMs: base + 60 * 1000, idleSeconds: 30 });
+  check('live: within the horizon the (idle) zombie is still shown',
+    zSoon.agents.length === 2, zSoon.agents.map((a) => a.type).join(','));
+  const zLater = L.resolve(zEvents, { nowMs: base + 20 * 60 * 1000, idleSeconds: 30 });
+  check('live: past the 15-min horizon a never-ended agent is dropped entirely',
+    zLater.agents.length === 0 && zLater.counts.idle === 0,
+    zLater.agents.map((a) => a.type).join(',') + ' ' + JSON.stringify(zLater.counts));
+  const zKept = L.resolve(zEvents, { nowMs: base + 20 * 60 * 1000, idleSeconds: 30, staleMs: 0 });
+  check('live: staleMs=0 disables the horizon', zKept.agents.length === 2);
+
+  // ---- and against a real captured force-close log -------------------------
+  const zombieLog = fs.readFileSync(path.join(DD, 'zombie-session.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const lastMs = Date.parse(zombieLog[zombieLog.length - 1].ts);
+  const zFixNow = L.resolve(zombieLog, { nowMs: lastMs + 90 * 60 * 1000, idleSeconds: 30 });
+  check('live: captured force-close log renders nothing 90 min later',
+    zFixNow.agents.length === 0,
+    zFixNow.agents.length + ' left: ' + zFixNow.agents.map((a) => a.type).slice(0, 5).join(','));
+  const zFixOld = L.resolve(zombieLog, { nowMs: lastMs + 90 * 60 * 1000, idleSeconds: 30, staleMs: 0 });
+  check('live: without the horizon that same log would leave zombies behind',
+    zFixOld.agents.length > 0, 'sanity of the test itself');
 }
 
 // --- 9. model folds live rooms + department overlay ------------------
@@ -318,6 +375,206 @@ check('no legacy identifiers in shipped code', legacy.length === 0, legacy.join(
     hooksConfig.parseLenient('{\n  // a comment\n  "x": 1, /* blk */ "y": 2,\n}').y === 2);
   check('settings: textHasOurHooks detects our command path',
     hooksConfig.textHasOurHooks(JSON.stringify(merged)) && !hooksConfig.textHasOurHooks('{}'));
+}
+
+// --- 11. run view: claude argv construction -------------------------
+{
+  const base = buildClaudeArgs({ prompt: 'add a test for parseFoo' });
+  check('claudeArgs: -p prompt is its own element, verbatim',
+    base.args[0] === '-p' && base.args[1] === 'add a test for parseFoo');
+  check('claudeArgs: stream-json + verbose always present',
+    base.args.includes('--output-format') &&
+    base.args[base.args.indexOf('--output-format') + 1] === 'stream-json' &&
+    base.args.includes('--verbose'));
+  check('claudeArgs: default command is claude, no permission flag',
+    base.command === 'claude' && !base.args.includes('--permission-mode') &&
+    !base.args.join(' ').includes('dangerously'));
+
+  const full = buildClaudeArgs({
+    claudePath: 'claude.cmd',
+    prompt: 'say "hi" & echo done',
+    resume: 'sess-1234',
+    permissionMode: 'acceptEdits',
+    extraArgs: ['--allowedTools', 'Read Edit'],
+  });
+  check('claudeArgs: resume id appended after --resume',
+    full.args[full.args.indexOf('--resume') + 1] === 'sess-1234');
+  check('claudeArgs: permission mode appended when not default',
+    full.args[full.args.indexOf('--permission-mode') + 1] === 'acceptEdits');
+  check('claudeArgs: extra args appended verbatim, in order',
+    full.args.slice(-2).join(' ') === '--allowedTools Read Edit');
+  check('claudeArgs: prompt with shell metachars stays one element',
+    full.args[1] === 'say "hi" & echo done');
+  check('claudeArgs: falsy resume adds nothing',
+    !buildClaudeArgs({ prompt: 'x', resume: null }).args.includes('--resume'));
+  check('claudeArgs: unknown permission mode throws', (() => {
+    try { buildClaudeArgs({ prompt: 'x', permissionMode: 'yolo' }); return false; }
+    catch (e) { return /unknown claudePermissionMode/.test(e.message); }
+  })());
+
+  check('claudeArgs: win candidates try .exe then .cmd then bare',
+    JSON.stringify(candidateCommands('claude', 'win32')) ===
+    JSON.stringify(['claude.exe', 'claude.cmd', 'claude.bat', 'claude']));
+  check('claudeArgs: non-win candidates are just the name',
+    JSON.stringify(candidateCommands('claude', 'linux')) === JSON.stringify(['claude']));
+  check('claudeArgs: explicit extension is trusted as-is',
+    JSON.stringify(candidateCommands('claude.cmd', 'win32')) === JSON.stringify(['claude.cmd']));
+}
+
+// --- 11b. winWrap: Windows .cmd launcher is resolved, never shelled ---
+{
+  check('winWrap: needsCmdWrap only for .cmd/.bat on win32',
+    needsCmdWrap('claude.cmd', 'win32') && needsCmdWrap('x.bat', 'win32') &&
+    !needsCmdWrap('claude.exe', 'win32') && !needsCmdWrap('claude.cmd', 'linux'));
+
+  // cmd.exe tokeniser: whitespace splits, `"` toggles, backslash is literal
+  check('winWrap: tokenizeCmdLine keeps backslash paths intact',
+    JSON.stringify(tokenizeCmdLine('"%dp0%\\node.exe"  "%dp0%\\cli.js" %*')) ===
+    JSON.stringify(['%dp0%\\node.exe', '%dp0%\\cli.js', '%*']));
+
+  const DIR = 'C:\\tools\\npm';
+  // modern npm shim that forwards straight to a bundled .exe
+  const exeShim = [
+    '@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b',
+    ':start', 'SETLOCAL', 'CALL :find_dp0',
+    '"%dp0%\\node_modules\\@scope\\cli\\bin\\cli.exe"   %*',
+  ].join('\r\n');
+  const exeParsed = parseCmdShim(exeShim, DIR);
+  check('winWrap: .exe-forwarding shim resolves to the real exe, no args',
+    exeParsed && exeParsed.file === 'C:/tools/npm/node_modules/@scope/cli/bin/cli.exe' &&
+    exeParsed.prefixArgs.length === 0, JSON.stringify(exeParsed));
+
+  // classic npm shim that forwards to `node <cli.js>` via %_prog%
+  const jsShim = [
+    '@IF EXIST "%~dp0\\node.exe" (', '  SET "_prog=%~dp0\\node.exe"', ') ELSE (',
+    '  SET "_prog=node"', ')',
+    'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@scope\\cli\\cli.js" %*',
+  ].join('\r\n');
+  const jsParsed = parseCmdShim(jsShim, DIR);
+  check('winWrap: node-forwarding shim resolves to node + the cli.js path',
+    jsParsed && jsParsed.file === 'node' &&
+    JSON.stringify(jsParsed.prefixArgs) === JSON.stringify(['C:/tools/npm/node_modules/@scope/cli/cli.js']),
+    JSON.stringify(jsParsed));
+
+  check('winWrap: an unrecognisable .cmd is refused (null), never shelled',
+    parseCmdShim('@echo off\r\necho hello world\r\n', DIR) === null &&
+    parseCmdShim('@"%SOME_UNSET_VAR%\\thing.exe" %*', DIR) === null);
+
+  // --- spawn-level regression: a real shim, a hostile prompt, no shell ---
+  // Build a working npm-style shim that forwards to `node <echo-argv.mjs>`,
+  // resolve it exactly the way the extension does, spawn the result with NO
+  // shell, and prove the child got the prompt verbatim and nothing else ran.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agentyard-shim-'));
+  const echoJs = path.join(tmp, 'echo-argv.mjs');
+  fs.writeFileSync(echoJs, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));\n');
+  const shimCmd = path.join(tmp, 'claude.cmd');
+  fs.writeFileSync(shimCmd,
+    ['@ECHO off', 'SETLOCAL', '"%~dp0\\node.exe" "%~dp0\\echo-argv.mjs" %*'].join('\r\n'));
+
+  const resolved = resolveLauncher('claude.cmd', {
+    which: (n) => (n === 'claude.cmd' ? shimCmd : null),
+    read: (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } },
+    exists: (p) => fs.existsSync(p),
+    nodePath: process.execPath,
+  });
+  check('winWrap: resolveLauncher points at a runnable node + script',
+    resolved && /node(\.exe)?$/i.test(resolved.file) &&
+    resolved.prefixArgs.length === 1 && /echo-argv\.mjs$/.test(resolved.prefixArgs[0]),
+    JSON.stringify(resolved));
+
+  const HOSTILE = 'refactor x" & echo OWNED>' + path.join(tmp, 'PWNED.txt') + ' & rem ';
+  const userArgs = ['-p', HOSTILE, '--verbose'];
+  let childArgv = null;
+  let spawnErr = null;
+  try {
+    const file = /node(\.exe)?$/i.test(resolved.file) && !fs.existsSync(resolved.file)
+      ? process.execPath : resolved.file;
+    const outBuf = execFileSync(file, resolved.prefixArgs.concat(userArgs), {
+      timeout: 8000, windowsHide: true, shell: false,
+    });
+    childArgv = JSON.parse(String(outBuf));
+  } catch (e) {
+    spawnErr = e.message;
+  }
+  check('winWrap: child received the hostile prompt as ONE verbatim argv element',
+    !spawnErr && Array.isArray(childArgv) &&
+    childArgv.length === 3 && childArgv[1] === HOSTILE,
+    spawnErr || JSON.stringify(childArgv));
+  check('winWrap: no injected command ran — PWNED file was not created',
+    !fs.existsSync(path.join(tmp, 'PWNED.txt')));
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+}
+
+// --- 12. run view: stream-json parser -------------------------------
+{
+  const fixture = fs.readFileSync(path.join(DD, 'sample-stream-json.jsonl'), 'utf8');
+  // feed it in two arbitrary chunks to prove partial-line buffering
+  const cut = Math.floor(fixture.length / 2);
+  const p = new StreamJsonParser();
+  const items = p.push(fixture.slice(0, cut))
+    .concat(p.push(fixture.slice(cut)))
+    .concat(p.flush());
+  const kinds = items.map((i) => i.kind);
+  check('streamJson: emits a system init item first', kinds[0] === 'system');
+  check('streamJson: system item carries session + model + tool count',
+    items[0].sessionId === 'demo-run-0001' && items[0].model === 'claude-sonnet-4' && items[0].tools === 6);
+  check('streamJson: assistant text becomes an assistant item',
+    items.some((i) => i.kind === 'assistant' && /haiku/.test(i.text)));
+  const tool = items.find((i) => i.kind === 'tool' && i.name === 'Edit');
+  check('streamJson: tool_use -> compact tool item with path summary',
+    tool && tool.summary === '/home/dev/widget-shop/README.md');
+  const bash = items.find((i) => i.kind === 'tool' && i.name === 'Bash');
+  check('streamJson: Bash tool summarised to the command', bash && bash.summary === 'npm test --silent');
+  check('streamJson: tool_result -> tool-result item (ok)',
+    items.some((i) => i.kind === 'tool-result' && i.ok === true && /12 passing/.test(i.preview)));
+  const result = items.find((i) => i.kind === 'result');
+  check('streamJson: result item ok + turns + duration + session',
+    result && result.ok === true && result.numTurns === 4 && result.durationMs === 9120 &&
+    result.sessionId === 'demo-run-0001');
+  check('streamJson: parser exposes the last session id', p.sessionId === 'demo-run-0001');
+
+  // robustness: a non-JSON line -> a 'log' item, never a throw
+  const p2 = new StreamJsonParser();
+  const j2 = p2.push('not json here\n{"type":"result","subtype":"success","result":"ok","num_turns":1}\n');
+  check('streamJson: non-JSON stdout line becomes a log item, no throw',
+    j2[0].kind === 'log' && j2[0].text === 'not json here' && j2[1].kind === 'result');
+
+  // run.js pure formatter
+  check('run.describe: tool item -> "→ Name: summary"',
+    win.AY.run.describe({ kind: 'tool', name: 'Bash', summary: 'npm test' }).text === '→ Bash: npm test');
+  check('run.describe: result carries head + body',
+    win.AY.run.describe({ kind: 'result', ok: true, text: 'all good', numTurns: 2 }).body === 'all good');
+}
+
+// --- 13. run view: Cancel kills the whole process tree --------------
+{
+  const cp = require('node:child_process');
+  // a parent that spawns a long-lived child, so we prove tree-kill, not just
+  // a single kill(). Both should be gone after killTree().
+  const parentSrc =
+    'const cp=require("child_process");' +
+    'const c=cp.spawn(process.execPath,["-e","setInterval(()=>{},1e9)"],{stdio:"ignore"});' +
+    'process.stdout.write(String(c.pid));' +
+    'setInterval(()=>{},1e9);';
+  const child = cp.spawn(process.execPath, ['-e', parentSrc], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+    detached: process.platform !== 'win32',
+  });
+  let grandPid = 0;
+  child.stdout.on('data', (d) => { grandPid = parseInt(String(d).trim(), 10) || grandPid; });
+
+  await new Promise((r) => setTimeout(r, 400));
+  const parentPid = child.pid;
+  check('cancel: test processes are alive before kill',
+    isAlive(parentPid) && grandPid > 0 && isAlive(grandPid), 'parent=' + parentPid + ' grand=' + grandPid);
+
+  const ok = await killTree(child, { graceMs: 300 });
+  await new Promise((r) => setTimeout(r, 400));
+  check('cancel: killTree resolves truthy', ok === true);
+  check('cancel: parent process is gone', !isAlive(parentPid));
+  check('cancel: spawned child process is gone too', !isAlive(grandPid), 'grand=' + grandPid);
+  check('cancel: killTree on an already-dead/empty child is safe',
+    (await killTree(null)) === false);
 }
 
 check('extension registers WebviewViewProvider',
