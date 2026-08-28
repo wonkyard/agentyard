@@ -2,6 +2,28 @@
 
 All notable changes to Agentyard are recorded here.
 
+## 0.3.0
+
+- **Live activity from Claude Code, for any workspace.** Agentyard can now show
+  what your agents are actually doing right now, not just the last row in a
+  project database. A bundled hook script (`hooks/agentyard-hook.mjs`) appends
+  Claude Code lifecycle events to `~/.claude/agentyard/events-<session>.jsonl`;
+  the extension tails those files and resolves each agent to
+  working / idle / blocked with a one-line "what it's doing".
+- **Opt-in, never silent.** "Turn on live mode" (a command, and a click target
+  on the header pill) shows the exact JSON that will be merged into your
+  `~/.claude/settings.json` and asks before writing it. The merge is
+  non-destructive — your existing hooks are kept — and "turn off live mode"
+  removes only Agentyard's entries. A `settings.json.agentyard-backup` is written
+  first.
+- Roster now merges the workspace `.claude/agents/`, your user `~/.claude/agents/`,
+  and any agent types seen in live events (including built-ins like `Explore`).
+- Live sessions and subagents render as their own rooms above the departments;
+  a room busier than `agentyard.maxSpritesPerRoom` shows "+N more".
+- Header badge shows `LIVE` / `WATCHING` / `DEMO DATA` / `hooks off`.
+- `state/company.db` is now an optional third layer (the company board and Gate
+  history) rather than the only source of "who's working".
+
 ## 0.2.2
 
 - Much sharper text. The scene now renders at 2× and is scaled down to the panel
