@@ -7,12 +7,15 @@
 //   npm run sanity
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { toDepartments } = require('../shared/frontmatter.js');
+const hooksConfig = require('../shared/hooksConfig.js');
 const initSqlJs = require('sql.js');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -76,11 +79,11 @@ check('latest-status rows read', statuses.length >= 5, statuses.length + ' rows'
 // --- 3. load browser modules with a fake window ---------------------
 const win = { addEventListener() {}, performance: { now: () => 0 } };
 win.window = win;
-for (const f of ['js/palette.js', 'js/sprites.js', 'js/model.js', 'js/render.js']) {
+for (const f of ['js/palette.js', 'js/sprites.js', 'js/live.js', 'js/model.js', 'js/render.js']) {
   const code = fs.readFileSync(path.join(EXT_ROOT, 'webview', f), 'utf8');
-  new Function('window', 'self', 'globalThis', code)(win, win, win);
+  new Function('window', 'self', 'globalThis', 'module', code)(win, win, win, undefined);
 }
-check('webview namespace is AY', !!win.AY && !!win.AY.render && !!win.AY.sprites);
+check('webview namespace is AY', !!win.AY && !!win.AY.render && !!win.AY.sprites && !!win.AY.live);
 const office = win.AY.model.build(
   { departments, teamRoles, dataMode: 'demo' },
   { projects, statuses }
@@ -159,6 +162,164 @@ for (const f of shipped) {
   if (legacyRe.test(txt)) legacy.push(f);
 }
 check('no legacy identifiers in shipped code', legacy.length === 0, legacy.join(', '));
+
+// --- 7. hook script: writes clean JSONL, never leaks a secret -----------
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agentyard-hook-'));
+  const env = { ...process.env, HOME: tmp, USERPROFILE: tmp };
+  const HOOK = path.join(EXT_ROOT, 'hooks', 'agentyard-hook.mjs');
+  const SID = 'sanity-session-1';
+  const payloads = [
+    { hook_event_name: 'SessionStart', session_id: SID, cwd: '/tmp/proj' },
+    { hook_event_name: 'PreToolUse', session_id: SID, cwd: '/tmp/proj', tool_name: 'Read', tool_input: { file_path: '/tmp/proj/src/app.ts' } },
+    {
+      hook_event_name: 'PreToolUse', session_id: SID, cwd: '/tmp/proj', tool_name: 'Bash',
+      tool_input: { command: 'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY aws s3 ls && export GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789' },
+    },
+    { hook_event_name: 'SubagentStop', session_id: SID, agent_id: 'sub-9', agent_type: 'Explore' },
+    { hook_event_name: 'Stop', session_id: SID, stop_reason: 'end_turn' },
+  ];
+  let hookErr = null;
+  for (const p of payloads) {
+    try {
+      execFileSync(process.execPath, [HOOK], { input: JSON.stringify(p), env, timeout: 5000 });
+    } catch (e) {
+      hookErr = e.message;
+    }
+  }
+  const outFile = path.join(tmp, '.claude', 'agentyard', `events-${SID}.jsonl`);
+  const exists = fs.existsSync(outFile);
+  check('hook: wrote events JSONL to fake home', exists && !hookErr, hookErr || outFile);
+  let lines = [];
+  if (exists) lines = fs.readFileSync(outFile, 'utf8').split('\n').filter(Boolean);
+  check('hook: one line per event, all valid JSON', lines.length === payloads.length &&
+    lines.every((l) => { try { JSON.parse(l); return true; } catch { return false; } }),
+    lines.length + ' lines');
+  const blob = lines.join('\n');
+  check('hook: no secret substrings leaked',
+    !/wJalrXUtnFEMI/.test(blob) && !/ghp_abcdefghijklmnopqrstuvwxyz/.test(blob) &&
+    !/AWS_SECRET_ACCESS_KEY=\S/.test(blob) && blob.includes('[redacted]'));
+  const parsed = lines.map((l) => JSON.parse(l));
+  check('hook: records carry ts + hook_event_name + session_id',
+    parsed.every((r) => r.ts && r.hook_event_name && r.session_id === SID));
+  check('hook: Read tool summarised to just the path',
+    parsed.some((r) => r.tool_name === 'Read' && r.tool_input_summary === '/tmp/proj/src/app.ts'));
+  check('hook: subagent record keeps agent_id + agent_type',
+    parsed.some((r) => r.hook_event_name === 'SubagentStop' && r.agent_id === 'sub-9' && r.agent_type === 'Explore'));
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+}
+
+// --- 8. live state machine resolves statuses --------------------------
+{
+  const L = win.AY.live;
+  const base = Date.parse('2026-08-28T12:00:00Z');
+  const iso = (sec) => new Date(base + sec * 1000).toISOString();
+  const events = [
+    { ts: iso(0), hook_event_name: 'SessionStart', session_id: 's1', cwd: '/w/app' },
+    { ts: iso(1), hook_event_name: 'PreToolUse', session_id: 's1', cwd: '/w/app', tool_name: 'Edit', tool_input_summary: 'src/x.ts' },
+    { ts: iso(2), hook_event_name: 'SubagentStart', session_id: 's1', agent_id: 'g1', agent_type: 'Explore' },
+    { ts: iso(3), hook_event_name: 'PreToolUse', session_id: 's1', agent_id: 'g1', agent_type: 'Explore', tool_name: 'Grep', tool_input_summary: 'foo' },
+    { ts: iso(4), hook_event_name: 'SubagentStart', session_id: 's1', agent_id: 'g2', agent_type: 'Plan' },
+    { ts: iso(5), hook_event_name: 'PermissionRequest', session_id: 's1', agent_id: 'g2', agent_type: 'Plan', tool_name: 'Bash' },
+    { ts: iso(6), hook_event_name: 'SubagentStart', session_id: 's1', agent_id: 'g3', agent_type: 'code-reviewer' },
+    { ts: iso(7), hook_event_name: 'PreToolUse', session_id: 's1', agent_id: 'g3', agent_type: 'code-reviewer', tool_name: 'Read', tool_input_summary: 'a.ts' },
+    { ts: iso(8), hook_event_name: 'SubagentStop', session_id: 's1', agent_id: 'g3', agent_type: 'code-reviewer' },
+  ];
+  // t = 10s: main + Explore worked <30s ago -> working; Plan pending perm -> blocked; g3 stopped -> gone
+  const r1 = L.resolve(events, { nowMs: base + 10000, idleSeconds: 30 });
+  const byType = Object.fromEntries(r1.agents.map((a) => [a.type, a]));
+  check('live: main session is working', byType.main && byType.main.status === 'working', JSON.stringify(r1.counts));
+  check('live: Explore subagent is working', byType.Explore && byType.Explore.status === 'working');
+  check('live: PermissionRequest -> blocked', byType.Plan && byType.Plan.status === 'blocked');
+  check('live: SubagentStop lingers briefly then leaves', byType['code-reviewer'] && byType['code-reviewer'].leaving === true);
+  const rGone = L.resolve(events, { nowMs: base + 20000, idleSeconds: 30 });
+  check('live: SubagentStop -> agent gone after linger',
+    !rGone.agents.some((a) => a.type === 'code-reviewer'), rGone.agents.map((a) => a.type).join(','));
+  check('live: doing line shows tool + summary', byType.Explore.doing === 'Grep: foo', byType.Explore.doing);
+  // t = 5 min later: no new tool activity -> everyone idle (still within linger? no)
+  const r2 = L.resolve(events, { nowMs: base + 300000, idleSeconds: 30 });
+  const byType2 = Object.fromEntries(r2.agents.map((a) => [a.type, a]));
+  check('live: goes idle after idleSeconds', !byType2.main || byType2.main.status === 'idle',
+    byType2.main ? byType2.main.status : 'gone');
+  check('live: blocked persists while permission unresolved', byType2.Plan && byType2.Plan.status === 'blocked');
+  // data-mode badge
+  check('live: dataMode live when fresh', L.dataMode(r1, true, base + 10000) === 'live');
+  check('live: dataMode watching when quiet', L.dataMode(r2, true, base + 300000) === 'watching');
+  check('live: dataMode off without hooks', L.dataMode(r1, false, base + 10000) === 'off');
+}
+
+// --- 9. model folds live rooms + department overlay ------------------
+{
+  const base = Date.now();
+  const iso = (sec) => new Date(base + sec * 1000).toISOString();
+  const liveEvents = [
+    { ts: iso(-2), hook_event_name: 'SessionStart', session_id: 'ms', cwd: '/home/dev/widget' },
+    { ts: iso(-1), hook_event_name: 'PreToolUse', session_id: 'ms', cwd: '/home/dev/widget', tool_name: 'Bash', tool_input_summary: 'make' },
+    { ts: iso(-2), hook_event_name: 'SubagentStart', session_id: 'ms', agent_id: 'e1', agent_type: 'Explore' },
+    { ts: iso(-1), hook_event_name: 'PreToolUse', session_id: 'ms', agent_id: 'e1', agent_type: 'Explore', tool_name: 'Grep', tool_input_summary: 'main' },
+    { ts: iso(-1), hook_event_name: 'SubagentStart', session_id: 'ms', agent_id: 'f1', agent_type: 'forge' },
+    { ts: iso(0), hook_event_name: 'PreToolUse', session_id: 'ms', agent_id: 'f1', agent_type: 'forge', tool_name: 'Edit', tool_input_summary: 'toaster.c' },
+  ];
+  const office2 = win.AY.model.build(
+    { departments, teamRoles, dataMode: 'demo', liveEvents, hooksInstalled: true, nowMs: base, idleSeconds: 30, maxSpritesPerRoom: 8 },
+    { projects, statuses }
+  );
+  check('model: live main session becomes a room', office2.liveRooms.some((r) => r.kind === 'live-main'));
+  check('model: unknown subagent type gets its own room',
+    office2.liveRooms.some((r) => r.kind === 'live-sub' && r.title === 'Explore'));
+  const forgeDept = office2.departments.find((d) => d.name === 'forge');
+  check('model: live agent overlays matching department', forgeDept && forgeDept.live === true && forgeDept.status === 'working',
+    forgeDept ? JSON.stringify({ live: forgeDept.live, status: forgeDept.status }) : 'no forge');
+  check('model: forge NOT duplicated as a live room', !office2.liveRooms.some((r) => r.title === 'forge'));
+  check('model: liveMode is live', office2.liveMode === 'live');
+  // fleet cap
+  const fleet = [{ ts: iso(-1), hook_event_name: 'SessionStart', session_id: 'fs', cwd: '/x' }];
+  for (let i = 0; i < 20; i++) {
+    fleet.push({ ts: iso(-1), hook_event_name: 'SubagentStart', session_id: 'fs', agent_id: 'gp' + i, agent_type: 'general-purpose' });
+    fleet.push({ ts: iso(0), hook_event_name: 'PreToolUse', session_id: 'fs', agent_id: 'gp' + i, agent_type: 'general-purpose', tool_name: 'Read', tool_input_summary: 'f' + i });
+  }
+  const office3 = win.AY.model.build(
+    { departments, teamRoles, dataMode: 'demo', liveEvents: fleet, hooksInstalled: true, nowMs: base, idleSeconds: 30, maxSpritesPerRoom: 8 },
+    { projects, statuses }
+  );
+  const gpRoom = office3.liveRooms.find((r) => r.title === 'general-purpose');
+  check('model: fleet room caps sprites + reports overflow',
+    gpRoom && gpRoom.occupants.length === 8 && gpRoom.overflow === 12,
+    gpRoom ? gpRoom.occupants.length + '+' + gpRoom.overflow : 'no room');
+}
+
+// --- 10. settings.json hook merge is non-destructive ----------------
+{
+  const SCRIPT = 'C:/ext/agentyard/hooks/agentyard-hook.mjs';
+  const userSettings = {
+    model: 'sonnet',
+    hooks: {
+      PreToolUse: [
+        { matcher: 'Bash', hooks: [{ type: 'command', command: 'node /home/me/my-audit.js' }] },
+      ],
+    },
+  };
+  const merged = hooksConfig.mergeHooks(userSettings, SCRIPT);
+  check('settings: pre-existing unrelated hook preserved',
+    merged.hooks.PreToolUse.some((e) => e.hooks[0].command === 'node /home/me/my-audit.js'));
+  check('settings: our hook added to every event',
+    hooksConfig.HOOK_EVENTS.every((ev) =>
+      (merged.hooks[ev] || []).some((e) => e.hooks.some((h) => h.command.includes('agentyard-hook.mjs')))));
+  check('settings: user model key untouched', merged.model === 'sonnet');
+  check('settings: merge is idempotent',
+    JSON.stringify(hooksConfig.mergeHooks(merged, SCRIPT)) === JSON.stringify(merged));
+  const removed = hooksConfig.removeHooks(merged);
+  check('settings: after disable, user hook still present',
+    removed.hooks.PreToolUse.length === 1 &&
+    removed.hooks.PreToolUse[0].hooks[0].command === 'node /home/me/my-audit.js');
+  check('settings: after disable, none of ours remain',
+    !JSON.stringify(removed).includes('agentyard-hook.mjs'));
+  check('settings: lenient parse strips // and /* */ comments',
+    hooksConfig.parseLenient('{\n  // a comment\n  "x": 1, /* blk */ "y": 2,\n}').y === 2);
+  check('settings: textHasOurHooks detects our command path',
+    hooksConfig.textHasOurHooks(JSON.stringify(merged)) && !hooksConfig.textHasOurHooks('{}'));
+}
+
 check('extension registers WebviewViewProvider',
   /registerWebviewViewProvider\(\s*['"]agentyard\.office['"]/.test(
     fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8')));

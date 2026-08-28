@@ -2,7 +2,7 @@
   "name": "agentyard",
   "displayName": "Agentyard",
   "description": "A pixel-art view of your agent company, in the VS Code panel.",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "publisher": "wonkyard",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -45,6 +45,16 @@
         "command": "agentyard.focus",
         "title": "Focus Panel",
         "category": "Agentyard"
+      },
+      {
+        "command": "agentyard.enableLiveMode",
+        "title": "Turn On Live Mode",
+        "category": "Agentyard"
+      },
+      {
+        "command": "agentyard.disableLiveMode",
+        "title": "Turn Off Live Mode",
+        "category": "Agentyard"
       }
     ],
     "configuration": {
@@ -64,6 +74,16 @@
           "type": "number",
           "default": 3,
           "description": "How often to re-read the DB and agent files."
+        },
+        "agentyard.idleSeconds": {
+          "type": "number",
+          "default": 30,
+          "description": "An agent with no tool activity for this many seconds is shown as idle."
+        },
+        "agentyard.maxSpritesPerRoom": {
+          "type": "number",
+          "default": 8,
+          "description": "A room busier than this shows the first N agents and a \"+N more\" tile."
         }
       }
     }

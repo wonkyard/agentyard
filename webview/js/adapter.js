@@ -16,19 +16,25 @@
       mode: 'browser',
       wasmUrl: 'vendor/sql-wasm.wasm',
       async getRaw() {
-        const [agentsRes, dbRes] = await Promise.all([
+        const [agentsRes, dbRes, evRes] = await Promise.all([
           fetch('api/agents', { cache: 'no-store' }),
           fetch('api/db', { cache: 'no-store' }),
+          fetch('api/events', { cache: 'no-store' }).catch(() => null),
         ]);
         if (!agentsRes.ok) throw new Error('api/agents ' + agentsRes.status);
         if (!dbRes.ok) throw new Error('api/db ' + dbRes.status);
         const agents = await agentsRes.json();
         const dbBytes = new Uint8Array(await dbRes.arrayBuffer());
+        let live = { events: [], hooksInstalled: false };
+        if (evRes && evRes.ok) live = await evRes.json();
         return {
           dataMode: agents.dataMode || 'demo',
           departments: agents.departments,
           teamRoles: agents.teamRoles,
           dbBytes,
+          liveEvents: live.events || [],
+          hooksInstalled: !!live.hooksInstalled,
+          nowMs: Date.now(),
         };
       },
     };
@@ -49,6 +55,11 @@
         departments: msg.departments || [],
         teamRoles: msg.teamRoles || [],
         dbBytes: msg.dbBase64 ? b64ToBytes(msg.dbBase64) : new Uint8Array(),
+        liveEvents: msg.liveEvents || [],
+        hooksInstalled: !!msg.hooksInstalled,
+        nowMs: msg.nowMs || Date.now(),
+        idleSeconds: msg.idleSeconds || 30,
+        maxSpritesPerRoom: msg.maxSpritesPerRoom || 8,
       };
       const w = waiters;
       waiters = [];
@@ -60,6 +71,9 @@
     return {
       mode: 'vscode',
       wasmUrl: cfg.wasmUrl || 'vendor/sql-wasm.wasm',
+      runCommand(command) {
+        vscode.postMessage({ type: 'command', command });
+      },
       async getRaw() {
         vscode.postMessage({ type: 'poll' });
         if (latest) return latest;

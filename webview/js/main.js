@@ -44,8 +44,9 @@
 
   function relTime(ts) {
     if (!ts) return 'no status yet';
-    const then = Date.parse(String(ts).replace(' ', 'T') + 'Z');
-    if (isNaN(then)) return String(ts);
+    const raw = String(ts);
+    const then = Date.parse(raw.indexOf('T') === -1 ? raw.replace(' ', 'T') + 'Z' : raw);
+    if (isNaN(then)) return raw;
     let s = Math.floor((Date.now() - then) / 1000);
     if (s < 0) s = 0;
     if (s < 60) return s + 's ago';
@@ -84,6 +85,11 @@
       const h = hits[i];
       if (x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h) { found = h; break; }
     }
+    if (found && found.kind === 'livepill') {
+      if (AY.adapter.runCommand) AY.adapter.runCommand('agentyard.enableLiveMode');
+      else setStatus('Live mode is enabled from the Agentyard panel inside VS Code.', false);
+      return;
+    }
     if (found) {
       view.selectedId = found.id;
       showPanel(found.data);
@@ -105,8 +111,10 @@
       office = AY.model.build(raw, dbResult);
       lastError = null;
       const dataTag = office.dataMode === 'demo' ? 'SYNTHETIC demo data' : 'workspace data';
+      const liveTag = office.liveMode === 'off' ? 'hooks off'
+        : `${office.liveMode} · ${office.liveSessionCount} session(s), ${office.liveAgentCount} live agent(s)`;
       setStatus(
-        `${AY.adapter.mode} · ${dataTag} · ${office.departments.length} departments · ` +
+        `${AY.adapter.mode} · ${dataTag} · ${liveTag} · ${office.departments.length} departments · ` +
         `${office.annexes.length} annexes · updated ${new Date().toLocaleTimeString()}`
       );
       if (view.selectedId) {
@@ -114,6 +122,11 @@
           .map((d) => ['dept:' + d.name, d])
           .concat(...office.annexes.map((a) => a.team.map((m) => [
             'team:' + a.projectId + ':' + m.name, { ...m, annex: a.slug, projectId: a.projectId },
+          ])))
+          .concat(...(office.liveRooms || []).map((r) => r.occupants.map((m, i) => [
+            r.id + '#' + i,
+            { name: m.name, model: m.model, status: m.status, note: m.doing || m.note,
+              ts: m.ts, description: m.description || '' },
           ])));
         const hit = all.find(([id]) => id === view.selectedId);
         if (hit) showPanel(hit[1]);
