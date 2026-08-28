@@ -15,6 +15,7 @@
   const DEFAULT_IDLE_SECONDS = 30;
   const LINGER_MS = 8000; // keep a finished agent on screen briefly so you see it end
   const LIVE_WINDOW_MS = 60000; // events newer than this => data mode "LIVE"
+  const DEFAULT_STALE_MS = 15 * 60 * 1000; // absolute horizon for an agent with no terminal event
 
   const TOOL_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure']);
   const CC_BUILTINS = ['Explore', 'Plan', 'general-purpose', 'Task'];
@@ -51,7 +52,7 @@
 
   /**
    * @param {Array} events  hook-event records
-   * @param {{nowMs?:number, idleSeconds?:number}} [opts]
+   * @param {{nowMs?:number, idleSeconds?:number, staleMs?:number}} [opts]
    * @returns {{agents:Array, sessions:Array, agentTypes:Array, lastActivityMs:number,
    *            counts:{working:number,idle:number,blocked:number}}}
    */
@@ -59,6 +60,8 @@
     opts = opts || {};
     const now = opts.nowMs || Date.now();
     const idleMs = (opts.idleSeconds || DEFAULT_IDLE_SECONDS) * 1000;
+    // 0 / negative disables the horizon; undefined => the default.
+    const staleMs = opts.staleMs == null ? DEFAULT_STALE_MS : opts.staleMs;
 
     const list = (Array.isArray(events) ? events.slice() : [])
       .filter((e) => e && typeof e === 'object')
@@ -207,6 +210,16 @@
       const endedTs = a.ended ? a.endedTs : sess && sess.ended ? sess.endedTs : 0;
       if (endedTs && now - endedTs > LINGER_MS) continue; // gone
 
+      // Absolute staleness horizon. An agent that never received a terminal
+      // event (SessionEnd / Stop / SubagentStop) and whose newest activity is
+      // older than staleMs is a zombie — its VS Code was force-closed or
+      // crashed mid-run, so no terminal event was ever written and the
+      // linger path below can never clear it. Drop it entirely: not rendered,
+      // not counted. A live session merely paused between turns keeps emitting
+      // Stop and is handled by the linger path, so this only removes the dead.
+      const newestMs = Math.max(a.lastTs, a.lastToolTs, a.permissionTs, a.lastPrompt);
+      if (!endedTs && staleMs > 0 && newestMs && now - newestMs > staleMs) continue;
+
       let status;
       if (endedTs) {
         status = 'idle';
@@ -275,5 +288,8 @@
     return 'watching';
   }
 
-  return { resolve, dataMode, CC_BUILTINS, DEFAULT_IDLE_SECONDS, LINGER_MS, LIVE_WINDOW_MS };
+  return {
+    resolve, dataMode, CC_BUILTINS,
+    DEFAULT_IDLE_SECONDS, LINGER_MS, LIVE_WINDOW_MS, DEFAULT_STALE_MS,
+  };
 });

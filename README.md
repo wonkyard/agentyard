@@ -153,7 +153,7 @@ webview/
   js/main.js            poll loop, render loop, click + info panel, view toggle
   vendor/               vendored sql.js (MIT, see sql.js-LICENSE)
 shared/claudeArgs.js    builds the `claude -p` argv (pure, tested)
-shared/winWrap.js       quotes args for a .cmd CLI on Windows without shell:true
+shared/winWrap.js       resolves a Windows .cmd/.bat CLI shim to the real exe (no cmd.exe)
 shared/streamJson.js    parses the stream-json NDJSON into feed items (pure)
 shared/killTree.js      Cancel: kill the run's whole process tree
 ```

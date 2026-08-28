@@ -17,10 +17,26 @@ All notable changes to Agentyard are recorded here.
   button starts a fresh conversation; otherwise each message continues the same
   thread via `--resume`.
 - **Safety.** The prompt is always a spawn argument — never a shell string, and
-  never `shell: true`. A `.cmd`/`.bat` CLI on Windows is run through `cmd.exe`
-  with every argument individually quoted. The prompt and the run output are
-  never written to disk by Agentyard — the child's stdout goes only to the
-  webview.
+  never `shell: true`. There is no safe way to quote arguments for `cmd.exe`, so
+  Agentyard never invokes it: a `.cmd`/`.bat` CLI on Windows (e.g. an
+  npm-installed `claude.cmd`) is resolved to the real executable it forwards to
+  (`node <cli.js>` or a bundled `.exe`) and that is spawned directly, so the
+  prompt goes verbatim through `CreateProcess`. A launcher that can't be
+  resolved that way is refused with a message asking you to set
+  `agentyard.claudePath` to the real program — Agentyard will not run it through
+  a shell. The prompt and the run output are never written to disk by
+  Agentyard — the child's stdout goes only to the webview.
+- **Zombie sessions clear themselves.** If VS Code is force-closed or crashes
+  mid-run, the killed Claude Code sessions never report finishing, so their
+  activity used to hang around the Office scene as idle rooms forever. A live
+  agent with no finish event and no activity for `agentyard.staleMinutes`
+  (default 15) is now treated as dead and dropped, and its stale event log is
+  cleaned up within a couple of hours instead of a day.
+- **Live-mode hook survives updates.** The hook is now copied to a stable
+  `~/.claude/agentyard/agentyard-hook.mjs` and `settings.json` points there,
+  instead of at the version-named extension folder (which every update
+  replaced, silently breaking live activity). Existing installs are migrated on
+  first launch.
 - New settings: `agentyard.claudePath` (default `claude`; on Windows also tries
   `claude.exe` / `claude.cmd`), `agentyard.claudeExtraArgs` (string array, e.g.
   `["--allowedTools", "Read Edit Bash(npm test)"]`), and

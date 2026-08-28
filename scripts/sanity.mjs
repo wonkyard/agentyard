@@ -17,7 +17,7 @@ const require = createRequire(import.meta.url);
 const { toDepartments } = require('../shared/frontmatter.js');
 const hooksConfig = require('../shared/hooksConfig.js');
 const { buildClaudeArgs, candidateCommands } = require('../shared/claudeArgs.js');
-const { quoteArg, wrapForCmd, needsCmdWrap } = require('../shared/winWrap.js');
+const { needsCmdWrap, parseCmdShim, tokenizeCmdLine, resolveLauncher } = require('../shared/winWrap.js');
 const { StreamJsonParser } = require('../shared/streamJson.js');
 const { killTree, isAlive } = require('../shared/killTree.js');
 const initSqlJs = require('sql.js');
@@ -44,6 +44,11 @@ function readAgentDir(dir) {
 check('dev-data/demo.db present', fs.existsSync(path.join(DD, 'demo.db')));
 check('dev-data/agents present', fs.existsSync(path.join(DD, 'agents')));
 check('dev-data/team present', fs.existsSync(path.join(DD, 'team')));
+check('dev-data/zombie-session.jsonl present', fs.existsSync(path.join(DD, 'zombie-session.jsonl')));
+check('zombie fixture is synthetic (no real user paths / session id)', (() => {
+  const t = fs.readFileSync(path.join(DD, 'zombie-session.jsonl'), 'utf8');
+  return !/[A-Za-z]:\\Users\\/.test(t) && !/b178cf9a/.test(t);
+})());
 
 // --- 1. frontmatter -> departments -------------------------------------
 const departments = readAgentDir(path.join(DD, 'agents'));
@@ -266,6 +271,38 @@ check('no legacy identifiers in shipped code', legacy.length === 0, legacy.join(
   check('live: dataMode live when fresh', L.dataMode(r1, true, base + 10000) === 'live');
   check('live: dataMode watching when quiet', L.dataMode(r2, true, base + 300000) === 'watching');
   check('live: dataMode off without hooks', L.dataMode(r1, false, base + 10000) === 'off');
+
+  // ---- zombie horizon: an agent that never ended and went quiet is dropped ----
+  // A session force-closed mid-run never emits Stop / SessionEnd. Its events
+  // file ends on a PreToolUse. Long after, resolve() must not still render it.
+  const zEvents = [
+    { ts: iso(0), hook_event_name: 'SessionStart', session_id: 'z1', cwd: '/w/app' },
+    { ts: iso(1), hook_event_name: 'UserPromptSubmit', session_id: 'z1', cwd: '/w/app' },
+    { ts: iso(2), hook_event_name: 'SubagentStart', session_id: 'z1', agent_id: 'zs', agent_type: 'Explore' },
+    { ts: iso(3), hook_event_name: 'PreToolUse', session_id: 'z1', agent_id: 'zs', agent_type: 'Explore', tool_name: 'Grep', tool_input_summary: 'x' },
+    { ts: iso(5), hook_event_name: 'PreToolUse', session_id: 'z1', cwd: '/w/app', tool_name: 'Edit', tool_input_summary: 'a.ts' },
+  ];
+  const zSoon = L.resolve(zEvents, { nowMs: base + 60 * 1000, idleSeconds: 30 });
+  check('live: within the horizon the (idle) zombie is still shown',
+    zSoon.agents.length === 2, zSoon.agents.map((a) => a.type).join(','));
+  const zLater = L.resolve(zEvents, { nowMs: base + 20 * 60 * 1000, idleSeconds: 30 });
+  check('live: past the 15-min horizon a never-ended agent is dropped entirely',
+    zLater.agents.length === 0 && zLater.counts.idle === 0,
+    zLater.agents.map((a) => a.type).join(',') + ' ' + JSON.stringify(zLater.counts));
+  const zKept = L.resolve(zEvents, { nowMs: base + 20 * 60 * 1000, idleSeconds: 30, staleMs: 0 });
+  check('live: staleMs=0 disables the horizon', zKept.agents.length === 2);
+
+  // ---- and against a real captured force-close log -------------------------
+  const zombieLog = fs.readFileSync(path.join(DD, 'zombie-session.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const lastMs = Date.parse(zombieLog[zombieLog.length - 1].ts);
+  const zFixNow = L.resolve(zombieLog, { nowMs: lastMs + 90 * 60 * 1000, idleSeconds: 30 });
+  check('live: captured force-close log renders nothing 90 min later',
+    zFixNow.agents.length === 0,
+    zFixNow.agents.length + ' left: ' + zFixNow.agents.map((a) => a.type).slice(0, 5).join(','));
+  const zFixOld = L.resolve(zombieLog, { nowMs: lastMs + 90 * 60 * 1000, idleSeconds: 30, staleMs: 0 });
+  check('live: without the horizon that same log would leave zombies behind',
+    zFixOld.agents.length > 0, 'sanity of the test itself');
 }
 
 // --- 9. model folds live rooms + department overlay ------------------
@@ -384,25 +421,88 @@ check('no legacy identifiers in shipped code', legacy.length === 0, legacy.join(
     JSON.stringify(candidateCommands('claude.cmd', 'win32')) === JSON.stringify(['claude.cmd']));
 }
 
-// --- 11b. winWrap: cmd.exe wrapper quotes every arg (no shell:true) --
+// --- 11b. winWrap: Windows .cmd launcher is resolved, never shelled ---
 {
   check('winWrap: needsCmdWrap only for .cmd/.bat on win32',
     needsCmdWrap('claude.cmd', 'win32') && needsCmdWrap('x.bat', 'win32') &&
     !needsCmdWrap('claude.exe', 'win32') && !needsCmdWrap('claude.cmd', 'linux'));
-  check('winWrap: bare word passes through unquoted', quoteArg('claude') === 'claude');
-  check('winWrap: spaces force quoting', quoteArg('a b') === '"a b"');
-  check('winWrap: embedded quote is backslash-escaped', quoteArg('a"b') === '"a\\"b"');
-  check('winWrap: trailing backslash before closing quote is doubled',
-    quoteArg('a b\\') === '"a b\\\\"');
-  check('winWrap: backslash-then-quote inside an arg is escaped',
-    quoteArg('a\\"b') === '"a\\\\\\"b"');
-  const w = wrapForCmd('claude.cmd', ['-p', 'do "x" now', '--verbose']);
-  check('winWrap: invokes ComSpec with /d /s /c and verbatim args',
-    /cmd\.exe$/i.test(w.file) || w.file === 'cmd.exe' ? true : true);
-  check('winWrap: whole command line wrapped in one outer quote pair',
-    w.args[0] === '/d' && w.args[2] === '/c' &&
-    w.args[3].startsWith('"') && w.args[3].endsWith('"') &&
-    w.args[3].includes('"do \\"x\\" now"') && w.windowsVerbatimArguments === true);
+
+  // cmd.exe tokeniser: whitespace splits, `"` toggles, backslash is literal
+  check('winWrap: tokenizeCmdLine keeps backslash paths intact',
+    JSON.stringify(tokenizeCmdLine('"%dp0%\\node.exe"  "%dp0%\\cli.js" %*')) ===
+    JSON.stringify(['%dp0%\\node.exe', '%dp0%\\cli.js', '%*']));
+
+  const DIR = 'C:\\tools\\npm';
+  // modern npm shim that forwards straight to a bundled .exe
+  const exeShim = [
+    '@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b',
+    ':start', 'SETLOCAL', 'CALL :find_dp0',
+    '"%dp0%\\node_modules\\@scope\\cli\\bin\\cli.exe"   %*',
+  ].join('\r\n');
+  const exeParsed = parseCmdShim(exeShim, DIR);
+  check('winWrap: .exe-forwarding shim resolves to the real exe, no args',
+    exeParsed && exeParsed.file === 'C:/tools/npm/node_modules/@scope/cli/bin/cli.exe' &&
+    exeParsed.prefixArgs.length === 0, JSON.stringify(exeParsed));
+
+  // classic npm shim that forwards to `node <cli.js>` via %_prog%
+  const jsShim = [
+    '@IF EXIST "%~dp0\\node.exe" (', '  SET "_prog=%~dp0\\node.exe"', ') ELSE (',
+    '  SET "_prog=node"', ')',
+    'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@scope\\cli\\cli.js" %*',
+  ].join('\r\n');
+  const jsParsed = parseCmdShim(jsShim, DIR);
+  check('winWrap: node-forwarding shim resolves to node + the cli.js path',
+    jsParsed && jsParsed.file === 'node' &&
+    JSON.stringify(jsParsed.prefixArgs) === JSON.stringify(['C:/tools/npm/node_modules/@scope/cli/cli.js']),
+    JSON.stringify(jsParsed));
+
+  check('winWrap: an unrecognisable .cmd is refused (null), never shelled',
+    parseCmdShim('@echo off\r\necho hello world\r\n', DIR) === null &&
+    parseCmdShim('@"%SOME_UNSET_VAR%\\thing.exe" %*', DIR) === null);
+
+  // --- spawn-level regression: a real shim, a hostile prompt, no shell ---
+  // Build a working npm-style shim that forwards to `node <echo-argv.mjs>`,
+  // resolve it exactly the way the extension does, spawn the result with NO
+  // shell, and prove the child got the prompt verbatim and nothing else ran.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agentyard-shim-'));
+  const echoJs = path.join(tmp, 'echo-argv.mjs');
+  fs.writeFileSync(echoJs, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));\n');
+  const shimCmd = path.join(tmp, 'claude.cmd');
+  fs.writeFileSync(shimCmd,
+    ['@ECHO off', 'SETLOCAL', '"%~dp0\\node.exe" "%~dp0\\echo-argv.mjs" %*'].join('\r\n'));
+
+  const resolved = resolveLauncher('claude.cmd', {
+    which: (n) => (n === 'claude.cmd' ? shimCmd : null),
+    read: (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } },
+    exists: (p) => fs.existsSync(p),
+    nodePath: process.execPath,
+  });
+  check('winWrap: resolveLauncher points at a runnable node + script',
+    resolved && /node(\.exe)?$/i.test(resolved.file) &&
+    resolved.prefixArgs.length === 1 && /echo-argv\.mjs$/.test(resolved.prefixArgs[0]),
+    JSON.stringify(resolved));
+
+  const HOSTILE = 'refactor x" & echo OWNED>' + path.join(tmp, 'PWNED.txt') + ' & rem ';
+  const userArgs = ['-p', HOSTILE, '--verbose'];
+  let childArgv = null;
+  let spawnErr = null;
+  try {
+    const file = /node(\.exe)?$/i.test(resolved.file) && !fs.existsSync(resolved.file)
+      ? process.execPath : resolved.file;
+    const outBuf = execFileSync(file, resolved.prefixArgs.concat(userArgs), {
+      timeout: 8000, windowsHide: true, shell: false,
+    });
+    childArgv = JSON.parse(String(outBuf));
+  } catch (e) {
+    spawnErr = e.message;
+  }
+  check('winWrap: child received the hostile prompt as ONE verbatim argv element',
+    !spawnErr && Array.isArray(childArgv) &&
+    childArgv.length === 3 && childArgv[1] === HOSTILE,
+    spawnErr || JSON.stringify(childArgv));
+  check('winWrap: no injected command ran — PWNED file was not created',
+    !fs.existsSync(path.join(tmp, 'PWNED.txt')));
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 
 // --- 12. run view: stream-json parser -------------------------------

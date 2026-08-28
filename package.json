@@ -80,6 +80,11 @@
           "default": 30,
           "description": "An agent with no tool activity for this many seconds is shown as idle."
         },
+        "agentyard.staleMinutes": {
+          "type": "number",
+          "default": 15,
+          "description": "A live agent that never reported finishing and has had no activity for this many minutes is treated as a zombie (its VS Code was force-closed mid-run) and dropped from the scene. 0 disables the check."
+        },
         "agentyard.maxSpritesPerRoom": {
           "type": "number",
           "default": 8,
