@@ -2,7 +2,7 @@
   "name": "agentyard",
   "displayName": "Agentyard",
   "description": "A pixel-art view of your agent company, in the VS Code panel.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "wonkyard",
   "license": "MIT",
   "icon": "media/icon.png",

@@ -81,6 +81,9 @@ function getHtml(webview, extUri) {
     `img-src ${webview.cspSource} data:`,
     `style-src ${webview.cspSource} 'unsafe-inline'`,
     `font-src ${webview.cspSource}`,
+    // sql.js fetches its .wasm at runtime; without connect-src the webview
+    // hangs forever on "loading Agentyard…" because the DB never loads.
+    `connect-src ${webview.cspSource}`,
     `script-src 'nonce-${n}' 'wasm-unsafe-eval'`,
   ].join('; ');
 

@@ -21,6 +21,22 @@
     }[c]));
   }
 
+  function wrapText(c, text, x, y, maxW, lh) {
+    const words = String(text).split(/\s+/);
+    let line = '';
+    for (const w of words) {
+      const test = line ? line + ' ' + w : w;
+      if (c.measureText(test).width > maxW && line) {
+        c.fillText(line, x, y);
+        y += lh;
+        line = w;
+      } else {
+        line = test;
+      }
+    }
+    if (line) c.fillText(line, x, y);
+  }
+
   function relTime(ts) {
     if (!ts) return 'no status yet';
     const then = Date.parse(String(ts).replace(' ', 'T') + 'Z');
@@ -115,12 +131,20 @@
         AY.render.render(ctx, office, t, view);
       }
       hits = out.hits;
-    } else if (!lastError) {
+    } else {
       ctx.fillStyle = '#12141c';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#9aa0b4';
       ctx.font = '13px "Courier New", monospace';
-      ctx.fillText('loading Agentyard…', 20, 24);
+      if (lastError) {
+        ctx.fillStyle = '#ff6b6b';
+        ctx.fillText('Agentyard error:', 20, 28);
+        ctx.fillStyle = '#e0a0a0';
+        const msg = String(lastError && lastError.message || lastError);
+        wrapText(ctx, msg, 20, 50, canvas.width - 40, 18);
+      } else {
+        ctx.fillStyle = '#9aa0b4';
+        ctx.fillText('loading Agentyard…', 20, 24);
+      }
     }
     requestAnimationFrame(frame);
   }

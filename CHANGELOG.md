@@ -2,6 +2,15 @@
 
 All notable changes to Agentyard are recorded here.
 
+## 0.2.1
+
+- Fixed the packaged extension hanging on "loading Agentyard…". The webview
+  Content-Security-Policy was missing `connect-src`, so sql.js could never fetch
+  its `.wasm` and the company DB never loaded. (Only the packaged/installed
+  extension was affected; `npm run dev` in a browser was fine.)
+- The webview now draws the actual error text on the canvas when data loading
+  fails, instead of sitting on the loading screen forever.
+
 ## 0.2.0
 
 - Renamed the extension to **Agentyard**. (During early development the repo was
