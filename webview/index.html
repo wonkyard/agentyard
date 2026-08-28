@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WONKYARD Pixel Office</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="stage-wrap">
+      <canvas id="scene" width="900" height="600"></canvas>
+    </div>
+    <aside id="panel"></aside>
+    <div id="status">connecting…</div>
+  </div>
+
+  <!-- PO_CONFIG: the VS Code extension overwrites this block at load time. -->
+  <script>
+    window.PO_CONFIG = window.PO_CONFIG || { mode: 'browser', pollSeconds: 3, wasmUrl: 'vendor/sql-wasm.wasm' };
+  </script>
+
+  <script src="vendor/sql-wasm.js"></script>
+  <script src="js/palette.js"></script>
+  <script src="js/sprites.js"></script>
+  <script src="js/db.js"></script>
+  <script src="js/adapter.js"></script>
+  <script src="js/model.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

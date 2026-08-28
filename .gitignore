@@ -1,0 +1,9 @@
+node_modules/
+*.vsix
+.DS_Store
+
+# The synthetic demo fixtures (dev-data/agents, dev-data/team, dev-data/demo.db)
+# ARE tracked. Never commit real-workspace data copied in for local testing:
+/dev-data/real/
+/dev-data/**/company.db
+/dev-data/*.local.*

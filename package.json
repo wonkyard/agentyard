@@ -1,0 +1,55 @@
+{
+  "name": "wonkyard-pixel-office",
+  "displayName": "WONKYARD Pixel Office",
+  "description": "Pixel-art, top-down tycoon-game view of the WONKYARD company: departments, project repo teams, and every agent's live status.",
+  "version": "0.1.0",
+  "publisher": "wonkyard",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "pixelOffice.open",
+        "title": "Pixel Office: Open",
+        "category": "Pixel Office"
+      }
+    ],
+    "configuration": {
+      "title": "Pixel Office",
+      "properties": {
+        "pixelOffice.dbPath": {
+          "type": "string",
+          "default": "state/company.db",
+          "description": "Path to company.db relative to the first workspace folder."
+        },
+        "pixelOffice.agentsGlob": {
+          "type": "string",
+          "default": ".claude/agents",
+          "description": "Folder that holds the department agent .md files, relative to the first workspace folder."
+        },
+        "pixelOffice.pollSeconds": {
+          "type": "number",
+          "default": 3,
+          "description": "How often to re-read the DB and agent files."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vendor": "node scripts/vendor.mjs",
+    "demo-data": "node scripts/make-demo-data.mjs",
+    "dev": "node scripts/dev-server.mjs",
+    "sanity": "node scripts/sanity.mjs"
+  },
+  "devDependencies": {
+    "sql.js": "1.10.3"
+  }
+}

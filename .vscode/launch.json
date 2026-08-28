@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Pixel Office Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"]
+    },
+    {
+      "name": "Run against the WONKYARD company repo",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "${input:companyRepoPath}"
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "companyRepoPath",
+      "type": "promptString",
+      "description": "Path to a folder containing state/company.db and .claude/agents/",
+      "default": "${workspaceFolder}"
+    }
+  ]
+}

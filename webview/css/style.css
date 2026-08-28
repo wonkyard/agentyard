@@ -1,0 +1,120 @@
+:root {
+  color-scheme: dark;
+  --bg: #0d0f16;
+  --panel: #1b2030;
+  --line: #2f3547;
+  --text: #e8e6df;
+  --dim: #9aa0b4;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Courier New", ui-monospace, monospace;
+  height: 100%;
+}
+
+#app {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px;
+  gap: 10px;
+}
+
+#stage-wrap {
+  width: 100%;
+  max-width: 1100px;
+  border: 2px solid var(--line);
+  background: #12141c;
+  box-shadow: 0 0 0 4px #000 inset;
+}
+
+#scene {
+  display: block;
+  width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  cursor: pointer;
+}
+
+#status {
+  width: 100%;
+  max-width: 1100px;
+  font-size: 11px;
+  color: var(--dim);
+  padding: 4px 2px;
+}
+#status.err { color: #ef476f; }
+
+#panel {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  width: 320px;
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  background: var(--panel);
+  border: 2px solid var(--line);
+  border-left: 4px solid #2ec4b6;
+  padding: 14px 16px;
+  font-size: 12px;
+  display: none;
+  z-index: 10;
+}
+#panel.open { display: block; }
+
+#panel h2 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: #fff;
+  word-break: break-all;
+}
+
+#panel .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  border-bottom: 1px dotted var(--line);
+}
+#panel .row span { color: var(--dim); }
+#panel .row b { text-align: right; word-break: break-all; }
+
+#panel .st-working { color: #ffd166; }
+#panel .st-idle { color: #8b91a7; }
+#panel .st-blocked { color: #ef476f; }
+
+#panel .note {
+  margin-top: 10px;
+  padding: 8px;
+  background: #12141c;
+  border: 1px solid var(--line);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+#panel .desc {
+  margin-top: 8px;
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+#panel-close {
+  float: right;
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+}
+#panel-close:hover { color: #fff; }
