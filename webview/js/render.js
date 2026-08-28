@@ -77,18 +77,18 @@
     px(ctx, 0, 0, W, HEADER_H, P.roomWall);
     px(ctx, 0, HEADER_H - 2, W, 2, P.accentTeal);
     ctx.textBaseline = 'top';
-    ctx.font = 'bold 15px "Courier New", monospace';
+    ctx.font = 'bold 15px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
     ctx.fillStyle = P.text;
     ctx.fillText('AGENTYARD', MARGIN, 7);
     const tw = ctx.measureText('AGENTYARD').width;
-    ctx.font = '9px "Courier New", monospace';
+    ctx.font = '9px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
     ctx.fillStyle = P.textDim;
     ctx.fillText('v0.2', MARGIN + tw + 8, 12);
     ctx.fillStyle = P.textFaint;
     ctx.fillText('your agent company, live', MARGIN, 26);
 
     if (office.dataMode === 'demo') {
-      ctx.font = 'bold 9px "Courier New", monospace';
+      ctx.font = 'bold 9px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
       const dl = 'DEMO DATA';
       const dw = ctx.measureText(dl).width + 12;
       px(ctx, MARGIN + tw + 40, 9, dw, 14, P.purple);
@@ -103,7 +103,7 @@
       ['blocked ' + (c.blocked || 0), P.blocked],
     ];
     let x = W - MARGIN;
-    ctx.font = '10px "Courier New", monospace';
+    ctx.font = '10px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
     for (let i = chips.length - 1; i >= 0; i--) {
       const [label, col] = chips[i];
       const w = ctx.measureText(label).width + 18;
@@ -128,14 +128,14 @@
     px(ctx, 0, y0, W, BOARD_H, P.bgTop);
     px(ctx, 0, y0 + BOARD_H - 1, W, 1, P.roomWall);
     ctx.textBaseline = 'top';
-    ctx.font = '9px "Courier New", monospace';
+    ctx.font = '9px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
     ctx.fillStyle = P.textDim;
     ctx.fillText('COMPANY BOARD', MARGIN, y0 + 5);
 
     let x = MARGIN;
     let y = y0 + 18;
     let rowsUsed = 1;
-    ctx.font = '9px "Courier New", monospace';
+    ctx.font = '9px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
     for (const b of office.board) {
       const kind = b.projectId.slice(0, 4);
       const label = kind + ' ' + b.projectId.replace(/^IDEA-|^TOOL-|^DEMO-/, '') + '  ' + b.stage;
@@ -183,7 +183,7 @@
     px(ctx, rx, ry, CELL_W, 15, P.roomLabelBg);
     px(ctx, rx, ry, 4, 15, root.AY.modelColor(agent.model));
     ctx.textBaseline = 'top';
-    ctx.font = '10px "Courier New", monospace';
+    ctx.font = '10px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
     ctx.fillStyle = P.text;
     ctx.fillText(trunc(ctx, agent.name, CELL_W - 32), rx + 8, ry + 3);
     px(ctx, rx + CELL_W - 13, ry + 4, 7, 7, root.AY.statusColor(agent.status));
@@ -222,7 +222,7 @@
     }
 
     // model tag
-    ctx.font = '8px "Courier New", monospace';
+    ctx.font = '9px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
     ctx.fillStyle = P.textFaint;
     ctx.fillText(agent.model, rx + 7, ry + CELL_H - 11);
 
@@ -256,7 +256,7 @@
 
     // hanging sign
     const title = trunc(ctx, annex.slug || annex.projectId, aw - 24);
-    ctx.font = 'bold 10px "Courier New", monospace';
+    ctx.font = 'bold 10px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
     const sw = ctx.measureText(title).width + 14;
     const sx = ax + ((aw - sw) >> 1);
     px(ctx, sx + (sw >> 1) - 1, ay + 8, 2, 4, P.annexShadow);
@@ -265,7 +265,7 @@
     ctx.fillStyle = P.bgTop;
     ctx.textBaseline = 'top';
     ctx.fillText(title, sx + 7, ay + 15);
-    ctx.font = '8px "Courier New", monospace';
+    ctx.font = '9px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
     ctx.fillStyle = P.textDim;
     ctx.fillText(trunc(ctx, annex.stage, aw - 16), ax + 8, ay + 30);
 
@@ -293,7 +293,7 @@
       px(ctx, sxi, slotTop, w, 12, P.roomLabelBg);
       px(ctx, sxi, slotTop, w, 2, root.AY.modelColor(m.model));
       px(ctx, sxi + w - 9, slotTop + 3, 6, 6, root.AY.statusColor(m.status));
-      ctx.font = '7px "Courier New", monospace';
+      ctx.font = '8px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
       ctx.fillStyle = P.text;
       ctx.textBaseline = 'top';
       ctx.fillText(trunc(ctx, m.name, w - 12), sxi + 3, slotTop + 3);
@@ -324,7 +324,7 @@
         drawPerson(ctx, p.x, p.y, { ...lk, pose: 'walk', frame: st.frame, facing: p.facing, t });
       }
 
-      ctx.font = '7px "Courier New", monospace';
+      ctx.font = '8px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
       ctx.fillStyle = P.textFaint;
       ctx.fillText(m.model, sxi + 3, slotTop + slotH - 9);
 
@@ -387,7 +387,7 @@
     });
 
     ctx.textBaseline = 'top';
-    ctx.font = 'bold 10px "Courier New", monospace';
+    ctx.font = 'bold 10px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
     ctx.fillStyle = P.annexSign;
     ctx.fillText('PROJECT ANNEXES', MARGIN, L.annexLabelY);
     px(ctx, MARGIN + 116, L.annexLabelY + 5, W - MARGIN * 2 - 116, 1, '#4a3f30');

@@ -2,6 +2,13 @@
 
 All notable changes to Agentyard are recorded here.
 
+## 0.2.2
+
+- Much sharper text. The scene now renders at 2× and is scaled down to the panel
+  width by the browser, instead of a 1× canvas being stretched with
+  `image-rendering: pixelated` (which was shredding every label). Bumped the
+  smallest font sizes and switched to a cleaner monospace stack.
+
 ## 0.2.1
 
 - Fixed the packaged extension hanging on "loading Agentyard…". The webview
