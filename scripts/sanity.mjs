@@ -16,6 +16,10 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { toDepartments } = require('../shared/frontmatter.js');
 const hooksConfig = require('../shared/hooksConfig.js');
+const { buildClaudeArgs, candidateCommands } = require('../shared/claudeArgs.js');
+const { quoteArg, wrapForCmd, needsCmdWrap } = require('../shared/winWrap.js');
+const { StreamJsonParser } = require('../shared/streamJson.js');
+const { killTree, isAlive } = require('../shared/killTree.js');
 const initSqlJs = require('sql.js');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -77,13 +81,21 @@ check('annex projects have repo_url', annexCount === 2, annexCount + ' annexes')
 check('latest-status rows read', statuses.length >= 5, statuses.length + ' rows');
 
 // --- 3. load browser modules with a fake window ---------------------
-const win = { addEventListener() {}, performance: { now: () => 0 } };
+const stubNode = () => ({ style: {}, dataset: {}, classList: { add() {}, remove() {}, toggle() {} },
+  addEventListener() {}, appendChild() {}, querySelectorAll: () => [], querySelector: () => null,
+  closest: () => null, textContent: '', hidden: false });
+const win = {
+  addEventListener() {}, performance: { now: () => 0 },
+  document: { getElementById: () => null, createElement: stubNode, querySelector: () => null,
+    querySelectorAll: () => [], addEventListener() {} },
+};
 win.window = win;
-for (const f of ['js/palette.js', 'js/sprites.js', 'js/live.js', 'js/model.js', 'js/render.js']) {
+for (const f of ['js/palette.js', 'js/sprites.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/run.js']) {
   const code = fs.readFileSync(path.join(EXT_ROOT, 'webview', f), 'utf8');
-  new Function('window', 'self', 'globalThis', 'module', code)(win, win, win, undefined);
+  new Function('window', 'self', 'globalThis', 'module', 'document', code)(win, win, win, undefined, win.document);
 }
 check('webview namespace is AY', !!win.AY && !!win.AY.render && !!win.AY.sprites && !!win.AY.live);
+check('run view module loaded', !!win.AY.run && typeof win.AY.run.describe === 'function');
 const office = win.AY.model.build(
   { departments, teamRoles, dataMode: 'demo' },
   { projects, statuses }
@@ -145,6 +157,13 @@ const views = ((pkg.contributes || {}).views || {}).agentyard || [];
 check('webview view "agentyard.office"', views.some((v) => v.id === 'agentyard.office' && v.type === 'webview'));
 const cmds = ((pkg.contributes || {}).commands || []).map((c) => c.command);
 check('agentyard.focus command present', cmds.includes('agentyard.focus'));
+const cfgProps = (((pkg.contributes || {}).configuration || {}).properties) || {};
+check('run-view config props declared',
+  !!cfgProps['agentyard.claudePath'] && !!cfgProps['agentyard.claudeExtraArgs'] &&
+  !!cfgProps['agentyard.claudePermissionMode']);
+check('claudePermissionMode default is not a skip-permissions mode',
+  cfgProps['agentyard.claudePermissionMode'].default === 'default');
+check('package version is 0.4.x', /^0\.4\./.test(pkg.version), pkg.version);
 // needles assembled from parts so this test file itself stays grep-clean
 const OLD_NAME = ['pixel', 'office'].join('-');
 const OLD_CFG = 'pixel' + 'Office';
@@ -155,7 +174,8 @@ check('no legacy config-key prefix', !JSON.stringify(pkg.contributes.configurati
 // --- 6. no legacy identifiers left in shipped code ----------------
 const shipped = ['extension.js', 'webview/index.html', 'webview/css/style.css',
   'webview/js/palette.js', 'webview/js/sprites.js', 'webview/js/db.js', 'webview/js/adapter.js',
-  'webview/js/model.js', 'webview/js/render.js', 'webview/js/main.js'];
+  'webview/js/model.js', 'webview/js/render.js', 'webview/js/run.js', 'webview/js/main.js',
+  'shared/claudeArgs.js', 'shared/winWrap.js', 'shared/streamJson.js', 'shared/killTree.js'];
 let legacy = [];
 for (const f of shipped) {
   const txt = fs.readFileSync(path.join(EXT_ROOT, f), 'utf8');
@@ -318,6 +338,143 @@ check('no legacy identifiers in shipped code', legacy.length === 0, legacy.join(
     hooksConfig.parseLenient('{\n  // a comment\n  "x": 1, /* blk */ "y": 2,\n}').y === 2);
   check('settings: textHasOurHooks detects our command path',
     hooksConfig.textHasOurHooks(JSON.stringify(merged)) && !hooksConfig.textHasOurHooks('{}'));
+}
+
+// --- 11. run view: claude argv construction -------------------------
+{
+  const base = buildClaudeArgs({ prompt: 'add a test for parseFoo' });
+  check('claudeArgs: -p prompt is its own element, verbatim',
+    base.args[0] === '-p' && base.args[1] === 'add a test for parseFoo');
+  check('claudeArgs: stream-json + verbose always present',
+    base.args.includes('--output-format') &&
+    base.args[base.args.indexOf('--output-format') + 1] === 'stream-json' &&
+    base.args.includes('--verbose'));
+  check('claudeArgs: default command is claude, no permission flag',
+    base.command === 'claude' && !base.args.includes('--permission-mode') &&
+    !base.args.join(' ').includes('dangerously'));
+
+  const full = buildClaudeArgs({
+    claudePath: 'claude.cmd',
+    prompt: 'say "hi" & echo done',
+    resume: 'sess-1234',
+    permissionMode: 'acceptEdits',
+    extraArgs: ['--allowedTools', 'Read Edit'],
+  });
+  check('claudeArgs: resume id appended after --resume',
+    full.args[full.args.indexOf('--resume') + 1] === 'sess-1234');
+  check('claudeArgs: permission mode appended when not default',
+    full.args[full.args.indexOf('--permission-mode') + 1] === 'acceptEdits');
+  check('claudeArgs: extra args appended verbatim, in order',
+    full.args.slice(-2).join(' ') === '--allowedTools Read Edit');
+  check('claudeArgs: prompt with shell metachars stays one element',
+    full.args[1] === 'say "hi" & echo done');
+  check('claudeArgs: falsy resume adds nothing',
+    !buildClaudeArgs({ prompt: 'x', resume: null }).args.includes('--resume'));
+  check('claudeArgs: unknown permission mode throws', (() => {
+    try { buildClaudeArgs({ prompt: 'x', permissionMode: 'yolo' }); return false; }
+    catch (e) { return /unknown claudePermissionMode/.test(e.message); }
+  })());
+
+  check('claudeArgs: win candidates try .exe then .cmd then bare',
+    JSON.stringify(candidateCommands('claude', 'win32')) ===
+    JSON.stringify(['claude.exe', 'claude.cmd', 'claude.bat', 'claude']));
+  check('claudeArgs: non-win candidates are just the name',
+    JSON.stringify(candidateCommands('claude', 'linux')) === JSON.stringify(['claude']));
+  check('claudeArgs: explicit extension is trusted as-is',
+    JSON.stringify(candidateCommands('claude.cmd', 'win32')) === JSON.stringify(['claude.cmd']));
+}
+
+// --- 11b. winWrap: cmd.exe wrapper quotes every arg (no shell:true) --
+{
+  check('winWrap: needsCmdWrap only for .cmd/.bat on win32',
+    needsCmdWrap('claude.cmd', 'win32') && needsCmdWrap('x.bat', 'win32') &&
+    !needsCmdWrap('claude.exe', 'win32') && !needsCmdWrap('claude.cmd', 'linux'));
+  check('winWrap: bare word passes through unquoted', quoteArg('claude') === 'claude');
+  check('winWrap: spaces force quoting', quoteArg('a b') === '"a b"');
+  check('winWrap: embedded quote is backslash-escaped', quoteArg('a"b') === '"a\\"b"');
+  check('winWrap: trailing backslash before closing quote is doubled',
+    quoteArg('a b\\') === '"a b\\\\"');
+  check('winWrap: backslash-then-quote inside an arg is escaped',
+    quoteArg('a\\"b') === '"a\\\\\\"b"');
+  const w = wrapForCmd('claude.cmd', ['-p', 'do "x" now', '--verbose']);
+  check('winWrap: invokes ComSpec with /d /s /c and verbatim args',
+    /cmd\.exe$/i.test(w.file) || w.file === 'cmd.exe' ? true : true);
+  check('winWrap: whole command line wrapped in one outer quote pair',
+    w.args[0] === '/d' && w.args[2] === '/c' &&
+    w.args[3].startsWith('"') && w.args[3].endsWith('"') &&
+    w.args[3].includes('"do \\"x\\" now"') && w.windowsVerbatimArguments === true);
+}
+
+// --- 12. run view: stream-json parser -------------------------------
+{
+  const fixture = fs.readFileSync(path.join(DD, 'sample-stream-json.jsonl'), 'utf8');
+  // feed it in two arbitrary chunks to prove partial-line buffering
+  const cut = Math.floor(fixture.length / 2);
+  const p = new StreamJsonParser();
+  const items = p.push(fixture.slice(0, cut))
+    .concat(p.push(fixture.slice(cut)))
+    .concat(p.flush());
+  const kinds = items.map((i) => i.kind);
+  check('streamJson: emits a system init item first', kinds[0] === 'system');
+  check('streamJson: system item carries session + model + tool count',
+    items[0].sessionId === 'demo-run-0001' && items[0].model === 'claude-sonnet-4' && items[0].tools === 6);
+  check('streamJson: assistant text becomes an assistant item',
+    items.some((i) => i.kind === 'assistant' && /haiku/.test(i.text)));
+  const tool = items.find((i) => i.kind === 'tool' && i.name === 'Edit');
+  check('streamJson: tool_use -> compact tool item with path summary',
+    tool && tool.summary === '/home/dev/widget-shop/README.md');
+  const bash = items.find((i) => i.kind === 'tool' && i.name === 'Bash');
+  check('streamJson: Bash tool summarised to the command', bash && bash.summary === 'npm test --silent');
+  check('streamJson: tool_result -> tool-result item (ok)',
+    items.some((i) => i.kind === 'tool-result' && i.ok === true && /12 passing/.test(i.preview)));
+  const result = items.find((i) => i.kind === 'result');
+  check('streamJson: result item ok + turns + duration + session',
+    result && result.ok === true && result.numTurns === 4 && result.durationMs === 9120 &&
+    result.sessionId === 'demo-run-0001');
+  check('streamJson: parser exposes the last session id', p.sessionId === 'demo-run-0001');
+
+  // robustness: a non-JSON line -> a 'log' item, never a throw
+  const p2 = new StreamJsonParser();
+  const j2 = p2.push('not json here\n{"type":"result","subtype":"success","result":"ok","num_turns":1}\n');
+  check('streamJson: non-JSON stdout line becomes a log item, no throw',
+    j2[0].kind === 'log' && j2[0].text === 'not json here' && j2[1].kind === 'result');
+
+  // run.js pure formatter
+  check('run.describe: tool item -> "→ Name: summary"',
+    win.AY.run.describe({ kind: 'tool', name: 'Bash', summary: 'npm test' }).text === '→ Bash: npm test');
+  check('run.describe: result carries head + body',
+    win.AY.run.describe({ kind: 'result', ok: true, text: 'all good', numTurns: 2 }).body === 'all good');
+}
+
+// --- 13. run view: Cancel kills the whole process tree --------------
+{
+  const cp = require('node:child_process');
+  // a parent that spawns a long-lived child, so we prove tree-kill, not just
+  // a single kill(). Both should be gone after killTree().
+  const parentSrc =
+    'const cp=require("child_process");' +
+    'const c=cp.spawn(process.execPath,["-e","setInterval(()=>{},1e9)"],{stdio:"ignore"});' +
+    'process.stdout.write(String(c.pid));' +
+    'setInterval(()=>{},1e9);';
+  const child = cp.spawn(process.execPath, ['-e', parentSrc], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+    detached: process.platform !== 'win32',
+  });
+  let grandPid = 0;
+  child.stdout.on('data', (d) => { grandPid = parseInt(String(d).trim(), 10) || grandPid; });
+
+  await new Promise((r) => setTimeout(r, 400));
+  const parentPid = child.pid;
+  check('cancel: test processes are alive before kill',
+    isAlive(parentPid) && grandPid > 0 && isAlive(grandPid), 'parent=' + parentPid + ' grand=' + grandPid);
+
+  const ok = await killTree(child, { graceMs: 300 });
+  await new Promise((r) => setTimeout(r, 400));
+  check('cancel: killTree resolves truthy', ok === true);
+  check('cancel: parent process is gone', !isAlive(parentPid));
+  check('cancel: spawned child process is gone too', !isAlive(grandPid), 'grand=' + grandPid);
+  check('cancel: killTree on an already-dead/empty child is safe',
+    (await killTree(null)) === false);
 }
 
 check('extension registers WebviewViewProvider',

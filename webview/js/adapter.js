@@ -15,6 +15,20 @@
     return {
       mode: 'browser',
       wasmUrl: 'vendor/sql-wasm.wasm',
+      // The run view needs a real child process, so it is VS Code only. The dev
+      // server can still hand back a canned sample feed for layout work.
+      runSupported: false,
+      onRun() {},
+      async runSample() {
+        try {
+          const res = await fetch('api/run-sample', { cache: 'no-store' });
+          if (!res.ok) return [];
+          const data = await res.json();
+          return Array.isArray(data.items) ? data.items : [];
+        } catch (e) {
+          return [];
+        }
+      },
       async getRaw() {
         const [agentsRes, dbRes, evRes] = await Promise.all([
           fetch('api/agents', { cache: 'no-store' }),
@@ -46,9 +60,16 @@
     const cfg = root.AY_CONFIG || {};
     let latest = null;
     let waiters = [];
+    const runListeners = [];
 
     root.addEventListener('message', (ev) => {
       const msg = ev.data || {};
+      if (msg.type === 'run') {
+        runListeners.forEach((fn) => {
+          try { fn(msg); } catch (e) { /* ignore */ }
+        });
+        return;
+      }
       if (msg.type !== 'data') return;
       latest = {
         dataMode: msg.dataMode || 'workspace',
@@ -71,8 +92,24 @@
     return {
       mode: 'vscode',
       wasmUrl: cfg.wasmUrl || 'vendor/sql-wasm.wasm',
+      runSupported: true,
       runCommand(command) {
         vscode.postMessage({ type: 'command', command });
+      },
+      onRun(fn) {
+        if (typeof fn === 'function') runListeners.push(fn);
+      },
+      runStatus() {
+        vscode.postMessage({ type: 'run', action: 'status' });
+      },
+      runSend(prompt, resume) {
+        vscode.postMessage({ type: 'run', action: 'send', prompt: String(prompt), resume: !!resume });
+      },
+      runCancel() {
+        vscode.postMessage({ type: 'run', action: 'cancel' });
+      },
+      runNew() {
+        vscode.postMessage({ type: 'run', action: 'new' });
       },
       async getRaw() {
         vscode.postMessage({ type: 'poll' });

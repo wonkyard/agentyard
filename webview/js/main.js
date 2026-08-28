@@ -10,6 +10,28 @@
   const panel = document.getElementById('panel');
   const statusEl = document.getElementById('status');
 
+  // ---- office / run view toggle -----------------------------------------
+  let officeVisible = true;
+  (function wireToggle() {
+    const bar = document.getElementById('view-toggle');
+    const officePane = document.getElementById('office-pane');
+    const runPane = document.getElementById('run-pane');
+    if (!bar || !officePane || !runPane) return;
+    bar.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-view]');
+      if (!btn) return;
+      const wantRun = btn.dataset.view === 'run';
+      officeVisible = !wantRun;
+      officePane.hidden = wantRun;
+      runPane.hidden = !wantRun;
+      for (const b of bar.querySelectorAll('button')) b.classList.toggle('on', b === btn);
+      if (!wantRun) requestAnimationFrame(frame); // repaint immediately on return
+    });
+  })();
+  if (AY.run && AY.run.init) {
+    try { AY.run.init(); } catch (e) { /* run view is optional */ }
+  }
+
   // Supersample: render the scene at SS× the logical size and let the browser
   // scale the canvas element down to the panel width. This is what keeps small
   // text readable — a 1× canvas scaled by CSS turns 9px labels to mush.
@@ -140,6 +162,10 @@
   }
 
   function frame() {
+    if (!officeVisible) {
+      requestAnimationFrame(frame);
+      return;
+    }
     const t = performance.now();
     if (office) {
       ctx.setTransform(SS, 0, 0, SS, 0, 0);

@@ -2,6 +2,35 @@
 
 All notable changes to Agentyard are recorded here.
 
+## 0.4.0
+
+- **Run Claude Code from the panel.** A header toggle switches between the
+  **Office** scene and a new **Run** view: an input box plus a scrollable feed.
+  Sending a prompt spawns `claude -p "<prompt>" --output-format stream-json
+  --verbose` as a child process in the workspace folder, using your existing
+  Claude Code CLI login — no API key, no metered billing. The NDJSON stream is
+  rendered as a feed: your prompt, assistant text, tool calls as compact lines
+  (`→ Bash: npm test`), tool results, and a final summary with turn count and
+  duration.
+- **One run at a time.** A **Cancel** button kills the whole process tree
+  (`taskkill /T` on Windows, process-group signal elsewhere). A **New thread**
+  button starts a fresh conversation; otherwise each message continues the same
+  thread via `--resume`.
+- **Safety.** The prompt is always a spawn argument — never a shell string, and
+  never `shell: true`. A `.cmd`/`.bat` CLI on Windows is run through `cmd.exe`
+  with every argument individually quoted. The prompt and the run output are
+  never written to disk by Agentyard — the child's stdout goes only to the
+  webview.
+- New settings: `agentyard.claudePath` (default `claude`; on Windows also tries
+  `claude.exe` / `claude.cmd`), `agentyard.claudeExtraArgs` (string array, e.g.
+  `["--allowedTools", "Read Edit Bash(npm test)"]`), and
+  `agentyard.claudePermissionMode` (default `default` — headless runs cannot
+  answer permission prompts, so pre-allow tools in settings or via extra args).
+- Because the spawned `claude` inherits any installed Agentyard hooks, its own
+  work also shows up as live rooms in the Office view.
+- Browser dev (`npm run dev`) stubs the Run view — it shows "available inside
+  VS Code" plus a canned sample feed from a synthetic fixture for layout work.
+
 ## 0.3.0
 
 - **Live activity from Claude Code, for any workspace.** Agentyard can now show

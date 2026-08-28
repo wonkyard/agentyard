@@ -7,6 +7,8 @@ dev-data/real/**
 media/screenshots/*.psd
 **/*.map
 *.vsix
+**/*.backup
+**/*.agentyard-backup
 .gitignore
 .vscodeignore
 .eslintrc*

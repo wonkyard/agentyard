@@ -13,6 +13,24 @@ Built by the Founder for their own use while running an agent-driven company.
 
 *(screenshot uses the bundled synthetic demo data, not a real company)*
 
+## Run view
+
+A header toggle switches between the office scene and a **Run** view — an input
+box and a scrollable feed. Send a prompt and Agentyard spawns the Claude Code
+CLI (`claude -p … --output-format stream-json --verbose`) in the workspace
+folder, using your existing CLI login (no API key), and streams the run back as
+a feed: your prompt, assistant text, tool calls (`→ Bash: npm test`), and the
+result. One run at a time; **Cancel** kills the process tree, **New thread**
+starts fresh (otherwise each message continues the thread via `--resume`).
+
+![run view](media/screenshots/agentyard-v0.4-run.png)
+
+Settings: `agentyard.claudePath` (default `claude`), `agentyard.claudeExtraArgs`
+(e.g. `["--allowedTools", "Read Edit Bash(npm test)"]`),
+`agentyard.claudePermissionMode` (default `default`). Headless runs can't answer
+permission prompts, so pre-allow the tools you want. Nothing about the run is
+written to disk by Agentyard.
+
 ## The panel tab
 
 Install the extension and an **Agentyard** tab appears in the bottom panel, next
@@ -85,8 +103,8 @@ Settings (`agentyard.*`): `dbPath` (default `state/company.db`),
 ## Install the packaged build
 
 ```bash
-npx vsce package                       # -> agentyard-0.2.0.vsix
-code --install-extension agentyard-0.2.0.vsix
+npx vsce package                       # -> agentyard-0.4.0.vsix
+code --install-extension agentyard-0.4.0.vsix
 ```
 
 ## Sanity check
@@ -131,8 +149,13 @@ webview/
   js/adapter.js         browser <-> VS Code data adapter
   js/model.js           merges agents + db rows into the office model
   js/render.js          scene layout + canvas drawing
-  js/main.js            poll loop, render loop, click + info panel
+  js/run.js             the Run view: feed rendering + send/cancel/new-thread
+  js/main.js            poll loop, render loop, click + info panel, view toggle
   vendor/               vendored sql.js (MIT, see sql.js-LICENSE)
+shared/claudeArgs.js    builds the `claude -p` argv (pure, tested)
+shared/winWrap.js       quotes args for a .cmd CLI on Windows without shell:true
+shared/streamJson.js    parses the stream-json NDJSON into feed items (pure)
+shared/killTree.js      Cancel: kill the run's whole process tree
 ```
 
 ## License

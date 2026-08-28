@@ -8,11 +8,35 @@
 </head>
 <body>
   <div id="app">
-    <div id="stage-wrap">
-      <canvas id="scene" width="840" height="600"></canvas>
+    <header id="topbar">
+      <span class="brand">AGENTYARD<span class="ver">v0.4</span></span>
+      <span id="view-toggle">
+        <button type="button" data-view="office" class="on">Office</button>
+        <button type="button" data-view="run">Run</button>
+      </span>
+    </header>
+    <div id="office-pane">
+      <div id="stage-wrap">
+        <canvas id="scene" width="840" height="600"></canvas>
+      </div>
+      <aside id="panel"></aside>
+      <div id="status">connecting…</div>
     </div>
-    <aside id="panel"></aside>
-    <div id="status">connecting…</div>
+    <div id="run-pane" hidden>
+      <div id="run-feed"></div>
+      <div id="run-bar">
+        <div id="run-hint" hidden></div>
+        <div id="run-input-row">
+          <textarea id="run-input" rows="1" placeholder="Send a prompt to Claude Code in this workspace…"></textarea>
+          <button type="button" id="run-send">Send</button>
+          <button type="button" id="run-cancel" hidden>Cancel</button>
+        </div>
+        <div id="run-foot">
+          <button type="button" id="run-new">New thread</button>
+          <span id="run-meta"></span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- AY_CONFIG: the VS Code extension overwrites this block at load time. -->
@@ -20,6 +44,13 @@
     window.AY_CONFIG = window.AY_CONFIG || { mode: 'browser', pollSeconds: 3, wasmUrl: 'vendor/sql-wasm.wasm' };
     // ?shot -> lay the whole scene out flat for a full-page screenshot (dev only)
     if (location.search.indexOf('shot') !== -1) document.documentElement.className = 'shot';
+    // ?view=run -> open the run view on load (dev / screenshot helper)
+    if (/[?&]view=run/.test(location.search)) {
+      window.addEventListener('DOMContentLoaded', () => {
+        const b = document.querySelector('#view-toggle button[data-view="run"]');
+        if (b) b.click();
+      });
+    }
   </script>
 
   <script src="vendor/sql-wasm.js"></script>
@@ -30,6 +61,7 @@
   <script src="js/live.js"></script>
   <script src="js/model.js"></script>
   <script src="js/render.js"></script>
+  <script src="js/run.js"></script>
   <script src="js/main.js"></script>
 </body>
 </html>

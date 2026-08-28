@@ -26,6 +26,163 @@ html, body {
   flex-direction: column;
 }
 
+/* ---- header: brand + office/run toggle ------------------------------- */
+#topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+#topbar .brand {
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #fff;
+}
+#topbar .brand .ver {
+  margin-left: 6px;
+  font-weight: 400;
+  font-size: 9px;
+  color: var(--dim);
+}
+#view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+#view-toggle button {
+  background: transparent;
+  border: 0;
+  color: var(--dim);
+  font: inherit;
+  font-size: 10px;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+#view-toggle button.on {
+  background: #2ec4b6;
+  color: #0d0f16;
+  font-weight: 700;
+}
+
+#office-pane,
+#run-pane {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+#office-pane[hidden],
+#run-pane[hidden] { display: none; }
+
+/* ---- run view ------------------------------------------------------- */
+#run-feed {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  background: #10121a;
+}
+.feed-ln { margin: 0 0 7px; }
+.feed-ln-head { white-space: pre-wrap; word-break: break-word; }
+.feed-ln-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-top: 2px;
+}
+.feed-ln-tag {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+}
+.ln-prompt {
+  border-left: 3px solid #2ec4b6;
+  padding: 3px 0 3px 8px;
+  background: #161b28;
+}
+.ln-prompt .feed-ln-body { color: #e8e6df; }
+.ln-system { color: var(--dim); font-size: 10px; }
+.ln-assistant { color: #d8e0f0; }
+.ln-tool { color: #ffd166; }
+.ln-result-ok { color: #7bd88f; font-size: 10px; }
+.ln-result-bad { color: #ef476f; font-size: 10px; }
+.ln-log { color: #8b91a7; font-size: 10px; white-space: pre-wrap; }
+.ln-error { color: #ef476f; }
+.ln-done { color: #7bd88f; font-weight: 700; }
+.ln-done.bad { color: #ef476f; }
+.ln-done .feed-ln-body { color: #d8e0f0; font-weight: 400; }
+.feed-divider {
+  border-top: 1px dashed var(--line);
+  margin: 8px 0;
+  text-align: center;
+  font-size: 9px;
+  color: var(--dim);
+  line-height: 1;
+  padding-top: 4px;
+}
+
+#run-bar {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  padding: 6px 8px;
+}
+#run-hint {
+  font-size: 10px;
+  color: #ffd166;
+  margin-bottom: 5px;
+}
+#run-input-row { display: flex; gap: 6px; align-items: flex-end; }
+#run-input {
+  flex: 1 1 auto;
+  resize: none;
+  background: #10121a;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 11px;
+  padding: 5px 7px;
+  min-height: 28px;
+  max-height: 140px;
+}
+#run-bar button {
+  background: #2ec4b6;
+  color: #0d0f16;
+  border: 0;
+  border-radius: 3px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+#run-bar button:disabled { opacity: 0.4; cursor: default; }
+#run-cancel { background: #ef476f; color: #fff; }
+#run-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 5px;
+}
+#run-foot #run-new {
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  font-weight: 400;
+  padding: 3px 9px;
+}
+#run-meta { font-size: 9px; color: var(--dim); }
+
 /* The scene lives in its own scroll container so it never overflows the panel.
    Narrow panel  -> horizontal scrollbar on the scene.
    Short panel   -> vertical scrollbar on the scene. */
@@ -50,10 +207,12 @@ html, body {
   cursor: pointer;
 }
 
-/* standalone browser dev: centre it and give some air */
-body:not(.panel) #app { padding: 10px; gap: 8px; align-items: center; }
+/* standalone browser dev: give the office pane some air */
+body:not(.panel) #office-pane { padding: 10px; gap: 8px; align-items: center; }
 body:not(.panel) #stage-wrap { width: 100%; max-width: 1120px; border: 2px solid var(--line); }
 body:not(.panel) #scene { margin: 0 auto; }
+body:not(.panel) #run-feed { max-width: 900px; margin: 0 auto; width: 100%; }
+body:not(.panel) #run-bar { max-width: 900px; margin: 0 auto; width: 100%; }
 
 /* ?shot: flatten everything for a full-scene screenshot (dev tooling only) */
 html.shot, html.shot body { overflow: visible; height: auto; }

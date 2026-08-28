@@ -2,7 +2,7 @@
   "name": "agentyard",
   "displayName": "Agentyard",
   "description": "A pixel-art view of your agent company, in the VS Code panel.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "wonkyard",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -84,6 +84,23 @@
           "type": "number",
           "default": 8,
           "description": "A room busier than this shows the first N agents and a \"+N more\" tile."
+        },
+        "agentyard.claudePath": {
+          "type": "string",
+          "default": "claude",
+          "description": "Command used to run the Claude Code CLI for the Run view. A bare name is looked up on PATH; on Windows Agentyard also tries claude.exe and claude.cmd. Uses your existing CLI login — no API key."
+        },
+        "agentyard.claudeExtraArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra arguments appended verbatim to each `claude -p` run, e.g. [\"--allowedTools\", \"Read Edit Bash(npm test)\"]. Headless runs cannot answer permission prompts, so pre-allow the tools you want."
+        },
+        "agentyard.claudePermissionMode": {
+          "type": "string",
+          "enum": ["default", "acceptEdits", "plan", "bypassPermissions"],
+          "default": "default",
+          "description": "Passed as --permission-mode for Run-view runs. Left as `default`, no flag is added. `bypassPermissions` skips all permission checks — only use it in a workspace you trust."
         }
       }
     }

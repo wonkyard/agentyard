@@ -18,6 +18,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { toDepartments } = require('../shared/frontmatter.js');
+const { StreamJsonParser } = require('../shared/streamJson.js');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EXT_ROOT = path.resolve(__dirname, '..');
@@ -150,6 +151,20 @@ const server = http.createServer((req, res) => {
     }
     if (url.startsWith('/api/events')) {
       return sendJson(res, readEvents());
+    }
+    if (url.startsWith('/api/run-sample')) {
+      // The run view needs a real child process (VS Code only). For browser
+      // layout work, parse the bundled synthetic stream-json fixture into the
+      // same feed items the extension would post.
+      const p = new StreamJsonParser();
+      let items = [];
+      try {
+        const raw = fs.readFileSync(path.join(DEMO_DIR, 'sample-stream-json.jsonl'), 'utf8');
+        items = p.push(raw).concat(p.flush());
+      } catch {
+        items = [];
+      }
+      return sendJson(res, { items });
     }
     if (url.startsWith('/api/db')) {
       const buf = fs.readFileSync(DB_PATH);

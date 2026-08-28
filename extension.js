@@ -4,8 +4,13 @@ const vscode = require('vscode');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const cp = require('child_process');
 const { toDepartments } = require('./shared/frontmatter.js');
 const hooksConfig = require('./shared/hooksConfig.js');
+const { buildClaudeArgs, candidateCommands } = require('./shared/claudeArgs.js');
+const { needsCmdWrap, wrapForCmd } = require('./shared/winWrap.js');
+const { StreamJsonParser } = require('./shared/streamJson.js');
+const { killTree, spawnGroupOpts } = require('./shared/killTree.js');
 
 function nonce() {
   let s = '';
@@ -318,6 +323,183 @@ async function disableLiveMode() {
   );
 }
 
+// ---- run Claude Code from the panel --------------------------------
+// One run at a time. Spawns `claude -p "<prompt>" --output-format stream-json
+// --verbose` with the user's existing CLI auth (no API key, no metered
+// billing). The prompt is always a spawn arg, never a shell string. stdout is
+// parsed to feed items and forwarded to the webview only — nothing is written
+// to disk here.
+class RunController {
+  constructor(post) {
+    this.post = post; // (msg) => void, to the webview
+    this.child = null;
+    this.parser = null;
+    this.sessionId = null; // last claude session id, for --resume
+    this.running = false;
+    this.stderrBuf = '';
+  }
+
+  dispose() {
+    this.cancel();
+  }
+
+  pushStatus() {
+    this.post({
+      type: 'run',
+      event: 'status',
+      running: this.running,
+      sessionId: this.sessionId,
+      hasWorkspace: !!workspaceRoot(),
+    });
+  }
+
+  newThread() {
+    if (this.running) return;
+    this.sessionId = null;
+    this.pushStatus();
+  }
+
+  send(prompt, resume) {
+    if (this.running) {
+      this.post({ type: 'run', event: 'error', message: 'A run is already in progress.' });
+      return;
+    }
+    prompt = String(prompt == null ? '' : prompt);
+    if (!prompt.trim()) return;
+    const root = workspaceRoot();
+    if (!root) {
+      this.post({ type: 'run', event: 'error', message: 'Open a workspace folder first — runs use the folder as the working directory.' });
+      return;
+    }
+
+    const cfg = vscode.workspace.getConfiguration('agentyard');
+    let built;
+    try {
+      built = buildClaudeArgs({
+        claudePath: cfg.get('claudePath', 'claude'),
+        prompt,
+        resume: resume ? this.sessionId : null,
+        permissionMode: cfg.get('claudePermissionMode', 'default'),
+        extraArgs: cfg.get('claudeExtraArgs', []),
+      });
+    } catch (e) {
+      this.post({ type: 'run', event: 'error', message: 'Bad Agentyard run config: ' + e.message });
+      return;
+    }
+
+    const candidates = candidateCommands(built.command, process.platform);
+    this.parser = new StreamJsonParser();
+    this.stderrBuf = '';
+    this.running = true;
+    this.post({
+      type: 'run',
+      event: 'started',
+      prompt,
+      resumed: !!(resume && this.sessionId),
+      resumeId: resume ? this.sessionId : null,
+    });
+    this.pushStatus();
+    this._spawn(candidates, 0, built.args, root);
+  }
+
+  _spawn(candidates, i, args, cwd) {
+    if (i >= candidates.length) {
+      this._fail('Could not launch "' + candidates[0] + '". Set agentyard.claudePath to the Claude Code CLI.');
+      return;
+    }
+    const command = candidates[i];
+    let file = command;
+    let spawnArgs = args;
+    const opts = { cwd, env: process.env, windowsHide: true, ...spawnGroupOpts(process.platform) };
+
+    if (needsCmdWrap(command, process.platform)) {
+      const w = wrapForCmd(command, args);
+      file = w.file;
+      spawnArgs = w.args;
+      opts.windowsVerbatimArguments = w.windowsVerbatimArguments;
+    }
+
+    let child;
+    try {
+      child = cp.spawn(file, spawnArgs, opts);
+    } catch (e) {
+      this._spawn(candidates, i + 1, args, cwd);
+      return;
+    }
+    this.child = child;
+
+    let sawData = false;
+    child.on('error', (err) => {
+      if (this.child !== child) return;
+      if (!sawData && (err.code === 'ENOENT' || err.code === 'EINVAL')) {
+        this.child = null;
+        this._spawn(candidates, i + 1, args, cwd);
+        return;
+      }
+      this._fail('claude process error: ' + err.message);
+    });
+
+    if (child.stdout) {
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (d) => {
+        sawData = true;
+        const items = this.parser.push(d);
+        if (this.parser.sessionId) this.sessionId = this.parser.sessionId;
+        for (const it of items) this.post({ type: 'run', event: 'item', item: it });
+        if (items.length) this.pushStatus();
+      });
+    }
+    if (child.stderr) {
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (d) => {
+        this.stderrBuf = (this.stderrBuf + d).slice(-4000);
+        this.post({ type: 'run', event: 'stderr', text: String(d).replace(/\s+$/, '') });
+      });
+    }
+
+    child.on('close', (code, signal) => {
+      if (this.child !== child) return;
+      const tail = this.parser ? this.parser.flush() : [];
+      if (this.parser && this.parser.sessionId) this.sessionId = this.parser.sessionId;
+      for (const it of tail) this.post({ type: 'run', event: 'item', item: it });
+      this.running = false;
+      this.child = null;
+      this.parser = null;
+      this.post({
+        type: 'run',
+        event: 'ended',
+        code: typeof code === 'number' ? code : null,
+        signal: signal || null,
+        sessionId: this.sessionId,
+        stderr: (code && this.stderrBuf.trim()) ? this.stderrBuf.trim().slice(-800) : null,
+      });
+      this.pushStatus();
+    });
+  }
+
+  _fail(message) {
+    this.running = false;
+    if (this.child) {
+      try { this.child.removeAllListeners(); } catch (e) { /* ignore */ }
+    }
+    this.child = null;
+    this.parser = null;
+    this.post({ type: 'run', event: 'error', message });
+    this.post({ type: 'run', event: 'ended', code: null, signal: null, sessionId: this.sessionId });
+    this.pushStatus();
+  }
+
+  cancel() {
+    const child = this.child;
+    if (!child) return;
+    this.post({ type: 'run', event: 'stderr', text: '^C cancelling…' });
+    killTree(child).then((ok) => {
+      if (!ok) this.post({ type: 'run', event: 'stderr', text: 'process may still be exiting' });
+    });
+    // the 'close' handler above emits 'ended' and clears state
+  }
+}
+
 // ---- webview -------------------------------------------------------
 function getHtml(webview, extUri) {
   const n = nonce();
@@ -337,7 +519,7 @@ function getHtml(webview, extUri) {
   ].join('; ');
 
   const scripts = ['vendor/sql-wasm.js', 'js/palette.js', 'js/sprites.js', 'js/db.js',
-    'js/adapter.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/main.js']
+    'js/adapter.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/run.js', 'js/main.js']
     .map((s) => `<script nonce="${n}" src="${asset(...s.split('/'))}"></script>`)
     .join('\n  ');
 
@@ -351,9 +533,33 @@ function getHtml(webview, extUri) {
 </head>
 <body class="panel">
   <div id="app">
-    <div id="stage-wrap"><canvas id="scene" width="840" height="600"></canvas></div>
-    <aside id="panel"></aside>
-    <div id="status">connecting…</div>
+    <header id="topbar">
+      <span class="brand">AGENTYARD<span class="ver">v0.4</span></span>
+      <span id="view-toggle">
+        <button type="button" data-view="office" class="on">Office</button>
+        <button type="button" data-view="run">Run</button>
+      </span>
+    </header>
+    <div id="office-pane">
+      <div id="stage-wrap"><canvas id="scene" width="840" height="600"></canvas></div>
+      <aside id="panel"></aside>
+      <div id="status">connecting…</div>
+    </div>
+    <div id="run-pane" hidden>
+      <div id="run-feed"></div>
+      <div id="run-bar">
+        <div id="run-hint" hidden></div>
+        <div id="run-input-row">
+          <textarea id="run-input" rows="1" placeholder="Send a prompt to Claude Code in this workspace…"></textarea>
+          <button type="button" id="run-send">Send</button>
+          <button type="button" id="run-cancel" hidden>Cancel</button>
+        </div>
+        <div id="run-foot">
+          <button type="button" id="run-new">New thread</button>
+          <span id="run-meta"></span>
+        </div>
+      </div>
+    </div>
   </div>
   <script nonce="${n}">
     window.AY_CONFIG = { mode: 'vscode', pollSeconds: ${JSON.stringify(cfg.get('pollSeconds', 3))}, wasmUrl: ${JSON.stringify(wasmUrl)} };
@@ -393,6 +599,9 @@ class OfficeViewProvider {
     this.timer = null;
     this.watchers = [];
     this.live = new LiveLog(() => this.pushData());
+    this.run = new RunController((m) => {
+      if (this.view) this.view.webview.postMessage(m);
+    });
   }
 
   pushData() {
@@ -412,6 +621,7 @@ class OfficeViewProvider {
   dispose() {
     this.stop();
     this.live.stop();
+    this.run.dispose();
   }
 
   startWatchers() {
@@ -453,6 +663,12 @@ class OfficeViewProvider {
         if (msg.command === 'agentyard.enableLiveMode' || msg.command === 'agentyard.disableLiveMode') {
           vscode.commands.executeCommand(msg.command);
         }
+      }
+      if (msg.type === 'run') {
+        if (msg.action === 'send') this.run.send(msg.prompt, !!msg.resume);
+        else if (msg.action === 'cancel') this.run.cancel();
+        else if (msg.action === 'new') this.run.newThread();
+        else if (msg.action === 'status') this.run.pushStatus();
       }
     });
 
