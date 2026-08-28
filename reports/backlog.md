@@ -5,7 +5,7 @@
 Why: The company Release Gate failed v0.4 on branch `v0.4-run` (`03ed6d3`). Two
 Critical findings block the merge; two Mediums came with the same brief and are
 cheap to fix in the same pass. Brief:
-`../company/reports/TOOL-20260828-1008/v0.4-gate-fail-round1.md`.
+`../company/reports/<project_id>/v0.4-gate-fail-round1.md`.
 
 Scope (exactly the four brief items):
 
@@ -48,7 +48,7 @@ header comment so the claims are true; `npm run sanity` ALL PASS; rebuild
 `agentyard-0.4.0.vsix`.
 
 Out of scope: anything not in the four items above — no new Run-view features, no
-renderer changes, no `TOOL-20260828-1008` string cleanup in `.claude/**` (handled
+renderer changes, no `<project_id>` string cleanup in `.claude/**` (handled
 in company public-release prep). No new milestone.
 
 Done when:

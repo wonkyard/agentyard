@@ -19,8 +19,18 @@ function scrubStr(s) {
     .replace(/[A-Za-z]:\\Users\\[^\\"]+\\OneDrive\\[^\\"]+\\wonkyard/gi, '/home/dev/widget-shop')
     .replace(/[A-Za-z]:\\Users\\[^\\"]+/gi, '/home/dev')
     .replace(/velog\.io\/@[A-Za-z0-9]+/gi, 'example.com/@dev')
-    .replace(/hyeokkiyaa|hyeok/gi, 'dev');
+    .replace(/(?:IDEA|TOOL)-\d[\d-]*/g, 'PROJ-XXXX')
+    .replace(/hyeokkiyaa|hyeok|wonkyardhq/gi, 'dev');
 }
+
+// The staleness/zombie logic in live.js only reads ts / event name / ids /
+// cwd — the captured tool_input_summary strings carry nothing the test needs
+// and can echo other projects' identifiers, so replace them with a generic
+// label per tool.
+const GENERIC_SUMMARY = {
+  Bash: 'run a shell command', Read: 'read a file', Write: 'write a file',
+  Edit: 'edit a file', Grep: 'search files', Glob: 'list files', Task: 'start a subagent',
+};
 
 const out = [];
 for (const line of fs.readFileSync(src, 'utf8').split('\n')) {
@@ -28,7 +38,10 @@ for (const line of fs.readFileSync(src, 'utf8').split('\n')) {
   if (!s) continue;
   const r = JSON.parse(s);
   if (r.session_id) r.session_id = SID;
-  for (const k of ['cwd', 'tool_input_summary', 'stop_reason']) {
+  if (typeof r.tool_input_summary === 'string') {
+    r.tool_input_summary = GENERIC_SUMMARY[r.tool_name] || 'work';
+  }
+  for (const k of ['cwd', 'stop_reason']) {
     if (typeof r[k] === 'string') r[k] = scrubStr(r[k]);
   }
   out.push(JSON.stringify(r));

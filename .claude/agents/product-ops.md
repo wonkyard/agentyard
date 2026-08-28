@@ -28,7 +28,7 @@ You are this product's own ops team — you exist only inside this one repo, not
    (or `SUGGEST TO FOUNDER` / `ESCALATE TO GROWTH`, with reasoning)
 5. If `../../state/company.db` is reachable, also log a `status_log` row there so the company Chief of Staff can see this repo was checked, e.g.:
    ```bash
-   sqlite3 ../../state/company.db "INSERT INTO status_log (project_id, department, status, note, ts) VALUES ('TOOL-20260828-1008', 'product-ops', 'idle', 'Checked deps + competitors, no critical findings', datetime('now'));"
+   sqlite3 ../../state/company.db "INSERT INTO status_log (project_id, department, status, note, ts) VALUES ('<project_id>', 'product-ops', 'idle', 'Checked deps + competitors, no critical findings', datetime('now'));"
    ```
 
 ## Rules

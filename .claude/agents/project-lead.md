@@ -33,7 +33,7 @@ your whole job is to keep this one product moving in a sensible direction and to
 4. If the priority is `now`, hand off: state clearly that `project-eng` should pick it up.
 5. Log status to `../../state/company.db` if reachable:
    ```bash
-   sqlite3 ../../state/company.db "INSERT INTO status_log (project_id, department, status, note, ts) VALUES ('TOOL-20260828-1008', 'project-lead', 'idle', '<one-line summary>', datetime('now'));"
+   sqlite3 ../../state/company.db "INSERT INTO status_log (project_id, department, status, note, ts) VALUES ('<project_id>', 'project-lead', 'idle', '<one-line summary>', datetime('now'));"
    ```
 
 ## Rules

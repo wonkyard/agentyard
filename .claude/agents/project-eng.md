@@ -15,7 +15,7 @@ You are the engineer for this single WONKYARD product. You implement one thing a
    `project-lead` to set one.
 2. Log start:
    ```bash
-   sqlite3 ../../state/company.db "INSERT INTO status_log (project_id, department, status, note, ts) VALUES ('TOOL-20260828-1008', 'project-eng', 'working', '<what you are building>', datetime('now'));" 2>/dev/null || true
+   sqlite3 ../../state/company.db "INSERT INTO status_log (project_id, department, status, note, ts) VALUES ('<project_id>', 'project-eng', 'working', '<what you are building>', datetime('now'));" 2>/dev/null || true
    ```
 3. Implement it. Match the surrounding code's style, naming, and comment density. Stay inside
    the stated scope — anything you notice outside it goes to `project-lead` as a note, not into

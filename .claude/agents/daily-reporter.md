@@ -29,7 +29,7 @@ You are given a period: usually a single date, sometimes a range ("this week", "
    entries for context (current stage, what departments last touched it).
 5. Write `reports/daily/<date>.md` (for a range, name it `<start>_to_<end>.md`):
    ```
-   # Daily Report — TOOL-20260828-1008 — <period>
+   # Daily Report — <project_id> — <period>
 
    ## Shipped
    - <commit summary, plain language — what changed and why it matters>
@@ -48,8 +48,8 @@ You are given a period: usually a single date, sometimes a range ("this week", "
    ```
 6. If `../../state/company.db` is reachable, record the summary so the company can query it:
    ```bash
-   sqlite3 ../../state/company.db "INSERT INTO project_reports (project_id, report_date, summary, detail_path, ts) VALUES ('TOOL-20260828-1008', '<date>', '<one-line summary>', 'reports/daily/<date>.md', datetime('now'));"
-   sqlite3 ../../state/company.db "INSERT INTO status_log (project_id, department, status, note, ts) VALUES ('TOOL-20260828-1008', 'daily-reporter', 'idle', 'Filed report for <period>', datetime('now'));"
+   sqlite3 ../../state/company.db "INSERT INTO project_reports (project_id, report_date, summary, detail_path, ts) VALUES ('<project_id>', '<date>', '<one-line summary>', 'reports/daily/<date>.md', datetime('now'));"
+   sqlite3 ../../state/company.db "INSERT INTO status_log (project_id, department, status, note, ts) VALUES ('<project_id>', 'daily-reporter', 'idle', 'Filed report for <period>', datetime('now'));"
    ```
 
 ## Rules

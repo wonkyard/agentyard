@@ -5,7 +5,7 @@ by `repo-manager`. It runs its own small team, sized to operate one product — 
 company. The company's Chief of Staff coordinates across repos; inside this repo, the team
 below coordinates itself.
 
-`project_id`: `TOOL-20260828-1008`
+`project_id`: `<project_id>`
 Company repo: `wonkyard/company`
 
 ## Team
