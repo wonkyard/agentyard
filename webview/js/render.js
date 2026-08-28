@@ -12,13 +12,26 @@
   const MARGIN = 14;
   const HEADER_H = 42;
   const BOARD_H = 66;
-  const OFFICE_TOP = HEADER_H + BOARD_H + 8;
+  const LIVE_TOP = HEADER_H + BOARD_H + 8;
   const COLS = 3;
   const GAP = 12;
   const CELL_W = Math.floor((W - MARGIN * 2 - GAP * (COLS - 1)) / COLS);
   const CELL_H = 150;
+  const LIVE_CELL_H = 132;
+
+  function liveLayout(office) {
+    const n = (office.liveRooms || []).length;
+    if (!n) return { rows: 0, labelY: 0, top: LIVE_TOP, height: 0, deptTop: LIVE_TOP };
+    const rows = Math.ceil(n / COLS);
+    const labelY = LIVE_TOP;
+    const top = labelY + 18;
+    const bottom = top + rows * LIVE_CELL_H + (rows - 1) * GAP;
+    return { rows, labelY, top, height: bottom - LIVE_TOP + 16, deptTop: bottom + 16 };
+  }
 
   function layout(office) {
+    const LL = liveLayout(office);
+    const OFFICE_TOP = LL.deptTop;
     const nDept = office.departments.length;
     const rows = Math.max(1, Math.ceil(nDept / COLS));
     const officeBottom = OFFICE_TOP + rows * CELL_H + (rows - 1) * GAP;
@@ -32,6 +45,7 @@
     const annexBottom = annexTop + annexRows * annexCellH + (annexRows - 1) * GAP;
     return {
       rows, officeBottom, annexLabelY, annexTop, annexCols, annexCellW, annexCellH,
+      deptTop: OFFICE_TOP, live: LL,
       height: annexBottom + MARGIN,
     };
   }
@@ -83,17 +97,36 @@
     const tw = ctx.measureText('AGENTYARD').width;
     ctx.font = '9px "Courier New", monospace';
     ctx.fillStyle = P.textDim;
-    ctx.fillText('v0.2', MARGIN + tw + 8, 12);
-    ctx.fillStyle = P.textFaint;
-    ctx.fillText('your agent company, live', MARGIN, 26);
+    ctx.fillText('v0.3', MARGIN + tw + 8, 12);
 
+    // --- data-mode pill (row 2, left) ---
+    let pillHit = null;
+    ctx.font = 'bold 9px "Courier New", monospace';
+    ctx.textBaseline = 'top';
+    let badge;
     if (office.dataMode === 'demo') {
-      ctx.font = 'bold 9px "Courier New", monospace';
-      const dl = 'DEMO DATA';
-      const dw = ctx.measureText(dl).width + 12;
-      px(ctx, MARGIN + tw + 40, 9, dw, 14, P.purple);
-      ctx.fillStyle = P.bgTop;
-      ctx.fillText(dl, MARGIN + tw + 46, 12);
+      badge = { text: 'DEMO DATA', bg: P.purple, fg: P.bgTop, click: false };
+    } else if (office.liveMode === 'live') {
+      badge = { text: 'LIVE', bg: P.green, fg: P.bgTop, click: false };
+    } else if (office.liveMode === 'watching') {
+      badge = { text: 'WATCHING', bg: P.accentTeal, fg: P.bgTop, click: false };
+    } else {
+      badge = { text: 'hooks off — turn on live mode', bg: '#3a2030', fg: P.blocked, click: true };
+    }
+    const bw = ctx.measureText(badge.text).width + 12;
+    px(ctx, MARGIN, 25, bw, 13, badge.bg);
+    if (badge.click) px(ctx, MARGIN, 25, 2, 13, P.blocked);
+    ctx.fillStyle = badge.fg;
+    ctx.fillText(badge.text, MARGIN + 6, 27);
+    if (badge.click) pillHit = { kind: 'livepill', x: MARGIN, y: 25, w: bw, h: 13 };
+
+    // live counts hint, right of the pill
+    if (office.dataMode !== 'demo' && (office.liveSessionCount || office.liveAgentCount)) {
+      ctx.font = '9px "Courier New", monospace';
+      ctx.fillStyle = P.textFaint;
+      ctx.fillText(
+        `${office.liveSessionCount} session${office.liveSessionCount === 1 ? '' : 's'} · ${office.liveAgentCount} agent${office.liveAgentCount === 1 ? '' : 's'}`,
+        MARGIN + bw + 8, 27);
     }
 
     const c = office.counts;
@@ -114,6 +147,7 @@
       ctx.fillText(label, x + 15, 15);
       x -= 6;
     }
+    return pillHit;
   }
 
   function stageColor(stage) {
@@ -233,6 +267,99 @@
     }
 
     return { kind: 'agent', id: 'dept:' + agent.name, x: rx, y: ry, w: CELL_W, h: CELL_H, data: agent };
+  }
+
+  // ---- live session / subagent room (glass office, reads as "now") --
+  function drawLiveRoom(ctx, room, rx, ry, w, h, t, view) {
+    const selected = view.selectedId === room.id;
+    px(ctx, rx - 2, ry - 2, w + 4, h + 4, P.roomShadow);
+    px(ctx, rx, ry, w, h, P.roomWall);
+
+    const fx = rx + 3, fy = ry + 16, fw = w - 6, fh = h - 19;
+    drawFloor(ctx, fx, fy, fw, fh, P.roomFloorWork, P.roomFloorWorkAlt);
+    px(ctx, fx, fy, fw, 16, P.roomWall);
+    px(ctx, fx, fy + 16, fw, 1, P.roomWallHi);
+    drawWindow(ctx, rx + 18, fy + 3, 22, 10, t);
+    drawWindow(ctx, rx + w - 42, fy + 3, 22, 10, t);
+
+    // title bar
+    px(ctx, rx, ry, w, 14, P.roomLabelBg);
+    px(ctx, rx, ry, 4, 14, P.accentTeal);
+    ctx.textBaseline = 'top';
+    ctx.font = '10px "Courier New", monospace';
+    ctx.fillStyle = P.text;
+    ctx.fillText(trunc(ctx, room.title, w - 46), rx + 8, ry + 2);
+    // pulsing LIVE dot
+    const pulse = 0.4 + 0.6 * Math.abs(Math.sin(t / 500));
+    alpha(ctx, pulse, () => px(ctx, rx + w - 14, ry + 4, 6, 6, P.green));
+
+    ctx.font = '7px "Courier New", monospace';
+    ctx.fillStyle = P.textFaint;
+    ctx.fillText(trunc(ctx, (room.kind === 'live-main' ? 'main · ' : 'subagent · ') + room.subtitle, w - 12), rx + 8, ry + h - 9);
+
+    const rects = [];
+    const occ = room.occupants || [];
+    const slots = occ.length + (room.overflow ? 1 : 0);
+    const slotW = Math.max(18, Math.floor((fw - 6) / Math.max(1, slots)));
+    const feetY = fy + fh - 8;
+    const showBubble = occ.length <= 2;
+
+    for (let i = 0; i < occ.length; i++) {
+      const m = occ[i];
+      const cx = fx + 3 + i * slotW + (slotW >> 1);
+      const lk = look(room.title + '|' + m.name + i);
+      const working = m.status === 'working';
+      const blocked = m.status === 'blocked';
+
+      if (working) {
+        const deskX = cx - 22, deskY = feetY - 12;
+        drawDesk(ctx, deskX, deskY, true, t);
+        drawChair(ctx, cx, feetY);
+        drawShadow(ctx, cx, feetY, 11);
+        drawPerson(ctx, cx, feetY - 4, { ...lk, pose: 'seated', t });
+        if (showBubble) drawThought(ctx, cx + 4, deskY - 14, m.doing || m.note || '…', t);
+      } else if (blocked) {
+        drawShadow(ctx, cx, feetY, 9);
+        drawPerson(ctx, cx, feetY, { ...lk, pose: 'stand', facing: 1, t });
+        drawBang(ctx, cx, feetY - 28, t);
+      } else {
+        const path = { x: fx + 8, y: fy + 20, w: fw - 16, h: fh - 30 };
+        const st = wanderState(lk, t);
+        const p = perimeter(path, st.d);
+        drawShadow(ctx, p.x, p.y, 8);
+        drawPerson(ctx, p.x, p.y, { ...lk, pose: 'walk', frame: st.frame, facing: p.facing, t });
+      }
+      px(ctx, cx - (slotW >> 1) + 2, fy + 18, 5, 5, root.AY.statusColor(m.status));
+
+      rects.push({
+        kind: 'agent',
+        id: room.id + '#' + i,
+        x: fx + 3 + i * slotW, y: fy + 17, w: slotW, h: fh - 17,
+        data: {
+          name: m.name, model: m.model, status: m.status,
+          note: m.doing || m.note, ts: m.ts, description: m.description || '',
+          annex: null, projectId: null,
+        },
+      });
+    }
+
+    if (room.overflow) {
+      const ox = fx + 3 + occ.length * slotW;
+      px(ctx, ox + 2, feetY - 20, slotW - 6, 18, P.roomLabelBg);
+      ctx.font = '8px "Courier New", monospace';
+      ctx.fillStyle = P.textDim;
+      ctx.fillText('+' + room.overflow, ox + 6, feetY - 14);
+      ctx.font = '6px "Courier New", monospace';
+      ctx.fillStyle = P.textFaint;
+      ctx.fillText('more', ox + 6, feetY - 7);
+    }
+
+    if (selected) {
+      ctx.strokeStyle = P.accentTeal;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(rx - 1, ry - 1, w + 2, h + 2);
+    }
+    return rects;
   }
 
   // ---- project annex building (visually distinct from HQ) ----------
@@ -363,21 +490,40 @@
 
   function render(ctx, office, t, view) {
     const L = layout(office);
+    const OFFICE_TOP = L.deptTop;
     ctx.imageSmoothingEnabled = false;
 
     px(ctx, 0, 0, W, L.height, P.bgFloor);
-    px(ctx, 0, OFFICE_TOP - 6, W, L.height - OFFICE_TOP + 6, P.hallFloor);
+    px(ctx, 0, LIVE_TOP - 6, W, L.height - LIVE_TOP + 6, P.hallFloor);
     // hallway tiling behind the rooms
-    for (let y = OFFICE_TOP; y < L.height; y += 12) {
+    for (let y = LIVE_TOP; y < L.height; y += 12) {
       for (let x = 0; x < W; x += 12) {
         if (((x / 12) + (y / 12)) % 2 === 0) px(ctx, x, y, 11, 11, P.hallTile);
       }
     }
 
-    drawHeader(ctx, office);
+    const pillHit = drawHeader(ctx, office);
     drawBoard(ctx, office);
 
     const hits = [];
+
+    // --- live activity strip ---
+    const rooms = office.liveRooms || [];
+    if (rooms.length) {
+      ctx.textBaseline = 'top';
+      ctx.font = 'bold 10px "Courier New", monospace';
+      ctx.fillStyle = P.accentTeal;
+      ctx.fillText('LIVE ACTIVITY', MARGIN, L.live.labelY);
+      px(ctx, MARGIN + 104, L.live.labelY + 5, W - MARGIN * 2 - 104, 1, '#265');
+      rooms.forEach((room, i) => {
+        const col = i % COLS;
+        const rowN = Math.floor(i / COLS);
+        const rx = MARGIN + col * (CELL_W + GAP);
+        const ry = L.live.top + rowN * (LIVE_CELL_H + GAP);
+        drawLiveRoom(ctx, room, rx, ry, CELL_W, LIVE_CELL_H, t, view).forEach((r) => hits.push(r));
+      });
+    }
+
     office.departments.forEach((agent, i) => {
       const col = i % COLS;
       const rowN = Math.floor(i / COLS);
@@ -401,6 +547,7 @@
     });
 
     ambient(ctx, W, L.height, t);
+    if (pillHit) hits.push(pillHit);
     return { hits, width: W, height: L.height };
   }
 

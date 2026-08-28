@@ -40,6 +40,45 @@ const TEAM_DIR = DEMO
   ? path.join(DEMO_DIR, 'team')
   : path.join(REAL_ROOT, 'templates', 'project-repo', '.claude', 'agents');
 
+// Live event log for the browser scene. AGENTYARD_EVENTS points at a real
+// events-*.jsonl; otherwise the bundled synthetic sample is used. Timestamps
+// are shifted so the newest event lands ~3s ago and the scene looks live.
+const EVENTS_FILE = process.env.AGENTYARD_EVENTS
+  ? path.resolve(process.env.AGENTYARD_EVENTS)
+  : path.join(DEMO_DIR, 'sample-events.jsonl');
+
+function readEvents() {
+  let raw;
+  try {
+    raw = fs.readFileSync(EVENTS_FILE, 'utf8');
+  } catch {
+    return { events: [], hooksInstalled: false };
+  }
+  const events = raw
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => {
+      try {
+        return JSON.parse(l);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+  let maxMs = 0;
+  for (const e of events) {
+    const m = Date.parse(String(e.ts || ''));
+    if (!isNaN(m)) maxMs = Math.max(maxMs, m);
+  }
+  const shift = maxMs ? Date.now() - 3000 - maxMs : 0;
+  for (const e of events) {
+    const m = Date.parse(String(e.ts || ''));
+    if (!isNaN(m)) e.ts = new Date(m + shift).toISOString();
+  }
+  return { events, hooksInstalled: true };
+}
+
 const PORT = Number(process.env.PORT || 4173);
 
 const MIME = {
@@ -109,6 +148,9 @@ const server = http.createServer((req, res) => {
         teamRoles: readAgentDir(TEAM_DIR),
       });
     }
+    if (url.startsWith('/api/events')) {
+      return sendJson(res, readEvents());
+    }
     if (url.startsWith('/api/db')) {
       const buf = fs.readFileSync(DB_PATH);
       res.writeHead(200, {
@@ -130,5 +172,6 @@ server.listen(PORT, () => {
   console.log('  data mode : ' + (DEMO ? 'SYNTHETIC demo fixtures' : 'real workspace: ' + REAL_ROOT));
   console.log('  db        : ' + DB_PATH + (fs.existsSync(DB_PATH) ? '' : '  (MISSING - run `npm run demo-data`)'));
   console.log('  agents    : ' + DEPT_DIR + (fs.existsSync(DEPT_DIR) ? '' : '  (MISSING)'));
+  console.log('  events    : ' + EVENTS_FILE + (fs.existsSync(EVENTS_FILE) ? '' : '  (MISSING)'));
   console.log('  open      : http://localhost:' + PORT);
 });
