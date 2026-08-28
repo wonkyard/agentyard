@@ -3,21 +3,23 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>WONKYARD Pixel Office</title>
+  <title>Agentyard</title>
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
   <div id="app">
     <div id="stage-wrap">
-      <canvas id="scene" width="900" height="600"></canvas>
+      <canvas id="scene" width="840" height="600"></canvas>
     </div>
     <aside id="panel"></aside>
     <div id="status">connecting…</div>
   </div>
 
-  <!-- PO_CONFIG: the VS Code extension overwrites this block at load time. -->
+  <!-- AY_CONFIG: the VS Code extension overwrites this block at load time. -->
   <script>
-    window.PO_CONFIG = window.PO_CONFIG || { mode: 'browser', pollSeconds: 3, wasmUrl: 'vendor/sql-wasm.wasm' };
+    window.AY_CONFIG = window.AY_CONFIG || { mode: 'browser', pollSeconds: 3, wasmUrl: 'vendor/sql-wasm.wasm' };
+    // ?shot -> lay the whole scene out flat for a full-page screenshot (dev only)
+    if (location.search.indexOf('shot') !== -1) document.documentElement.className = 'shot';
   </script>
 
   <script src="vendor/sql-wasm.js"></script>

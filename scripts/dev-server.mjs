@@ -1,14 +1,14 @@
-// Zero-dependency dev server for Pixel Office.
+// Zero-dependency dev server for Agentyard.
 //
 // Serves the exact same webview/ that the VS Code extension loads. By default it
 // feeds it the bundled SYNTHETIC fixtures in dev-data/ (fake departments, fake
 // projects) so nothing real is ever exposed. Point it at a real workspace with
-// PIXEL_OFFICE_REPO to view actual data locally.
+// AGENTYARD_REPO to view actual data locally.
 // No build step, no bundler, no network access.
 //
-//   npm run dev                                        (synthetic demo data)
+//   npm run dev                                     (synthetic demo data)
 //   PORT=5000 npm run dev
-//   PIXEL_OFFICE_REPO=/path/to/company-repo npm run dev (real: <root>/state/company.db + <root>/.claude/agents)
+//   AGENTYARD_REPO=/path/to/company-repo npm run dev (real: <root>/state/company.db + <root>/.claude/agents)
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -24,9 +24,10 @@ const EXT_ROOT = path.resolve(__dirname, '..');
 const WEBVIEW_DIR = path.join(EXT_ROOT, 'webview');
 const DEMO_DIR = path.join(EXT_ROOT, 'dev-data');
 
-const REAL_ROOT = process.env.PIXEL_OFFICE_REPO
-  ? path.resolve(process.env.PIXEL_OFFICE_REPO)
-  : null;
+// AGENTYARD_REPO is the current name. PIXEL_OFFICE_REPO is still read as a
+// fallback for one version — deprecated, remove after 0.3.
+const REPO_ENV = process.env.AGENTYARD_REPO || process.env.PIXEL_OFFICE_REPO;
+const REAL_ROOT = REPO_ENV ? path.resolve(REPO_ENV) : null;
 const DEMO = !REAL_ROOT;
 
 const DB_PATH = DEMO
@@ -125,7 +126,7 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log('WONKYARD Pixel Office - dev mode');
+  console.log('Agentyard - dev mode');
   console.log('  data mode : ' + (DEMO ? 'SYNTHETIC demo fixtures' : 'real workspace: ' + REAL_ROOT));
   console.log('  db        : ' + DB_PATH + (fs.existsSync(DB_PATH) ? '' : '  (MISSING - run `npm run demo-data`)'));
   console.log('  agents    : ' + DEPT_DIR + (fs.existsSync(DEPT_DIR) ? '' : '  (MISSING)'));

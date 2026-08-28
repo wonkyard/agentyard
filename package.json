@@ -1,10 +1,15 @@
 {
-  "name": "wonkyard-pixel-office",
-  "displayName": "WONKYARD Pixel Office",
-  "description": "Pixel-art, top-down tycoon-game view of the WONKYARD company: departments, project repo teams, and every agent's live status.",
-  "version": "0.1.0",
+  "name": "agentyard",
+  "displayName": "Agentyard",
+  "description": "A pixel-art view of your agent company, in the VS Code panel.",
+  "version": "0.2.0",
   "publisher": "wonkyard",
   "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wonkyard/agentyard.git"
+  },
   "engines": {
     "vscode": "^1.75.0"
   },
@@ -13,29 +18,49 @@
     "Other"
   ],
   "main": "./extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "agentyard",
+          "title": "Agentyard",
+          "icon": "media/panel-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "agentyard": [
+        {
+          "id": "agentyard.office",
+          "name": "Agentyard",
+          "type": "webview"
+        }
+      ]
+    },
     "commands": [
       {
-        "command": "pixelOffice.open",
-        "title": "Pixel Office: Open",
-        "category": "Pixel Office"
+        "command": "agentyard.focus",
+        "title": "Focus Panel",
+        "category": "Agentyard"
       }
     ],
     "configuration": {
-      "title": "Pixel Office",
+      "title": "Agentyard",
       "properties": {
-        "pixelOffice.dbPath": {
+        "agentyard.dbPath": {
           "type": "string",
           "default": "state/company.db",
           "description": "Path to company.db relative to the first workspace folder."
         },
-        "pixelOffice.agentsGlob": {
+        "agentyard.agentsGlob": {
           "type": "string",
           "default": ".claude/agents",
           "description": "Folder that holds the department agent .md files, relative to the first workspace folder."
         },
-        "pixelOffice.pollSeconds": {
+        "agentyard.pollSeconds": {
           "type": "number",
           "default": 3,
           "description": "How often to re-read the DB and agent files."
@@ -45,11 +70,13 @@
   },
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
+    "icon": "node scripts/make-icon.mjs",
     "demo-data": "node scripts/make-demo-data.mjs",
     "dev": "node scripts/dev-server.mjs",
     "sanity": "node scripts/sanity.mjs"
   },
   "devDependencies": {
+    "@vscode/vsce": "^3.2.0",
     "sql.js": "1.10.3"
   }
 }

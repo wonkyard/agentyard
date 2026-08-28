@@ -1,8 +1,13 @@
 .vscode/**
+.claude/**
 node_modules/**
 scripts/**
 reports/**
+dev-data/real/**
+media/screenshots/*.psd
 **/*.map
+*.vsix
 .gitignore
+.vscodeignore
 .eslintrc*
-/dev-data/real/**
+CLAUDE.md

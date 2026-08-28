@@ -1,4 +1,4 @@
-# pixel-office — Product Operating Manual
+# agentyard — Product Operating Manual
 
 This repo is a single WONKYARD product, split out from the company repo (`wonkyard/company`)
 by `repo-manager`. It runs its own small team, sized to operate one product — not the whole

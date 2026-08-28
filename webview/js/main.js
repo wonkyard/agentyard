@@ -1,7 +1,8 @@
-// Bootstrap: poll data, run the render loop, handle clicks + the info panel.
+// Bootstrap: poll data on an interval, run the render loop, handle clicks and
+// the info panel. Sized to work in a narrow/short VS Code panel view.
 (function (root) {
-  const PO = root.PO;
-  const cfg = root.PO_CONFIG || {};
+  const AY = root.AY;
+  const cfg = root.AY_CONFIG || {};
   const POLL_MS = Math.max(1000, (cfg.pollSeconds || 3) * 1000);
 
   const canvas = document.getElementById('scene');
@@ -78,16 +79,15 @@
 
   async function poll() {
     try {
-      const raw = await PO.adapter.getRaw();
-      const dbResult = await PO.db.read(raw.dbBytes, PO.adapter.wasmUrl);
-      office = PO.model.build(raw, dbResult);
+      const raw = await AY.adapter.getRaw();
+      const dbResult = await AY.db.read(raw.dbBytes, AY.adapter.wasmUrl);
+      office = AY.model.build(raw, dbResult);
       lastError = null;
       const dataTag = office.dataMode === 'demo' ? 'SYNTHETIC demo data' : 'workspace data';
       setStatus(
-        `${PO.adapter.mode} · ${dataTag} · ${office.departments.length} departments · ` +
+        `${AY.adapter.mode} · ${dataTag} · ${office.departments.length} departments · ` +
         `${office.annexes.length} annexes · updated ${new Date().toLocaleTimeString()}`
       );
-      // refresh open panel contents
       if (view.selectedId) {
         const all = office.departments
           .map((d) => ['dept:' + d.name, d])
@@ -101,18 +101,18 @@
       lastError = err;
       setStatus('data error: ' + err.message, true);
       // eslint-disable-next-line no-console
-      console.error('[pixel-office] poll failed', err);
+      console.error('[agentyard] poll failed', err);
     }
   }
 
   function frame() {
     const t = performance.now();
     if (office) {
-      const out = PO.render.render(ctx, office, t, view);
+      const out = AY.render.render(ctx, office, t, view);
       if (canvas.width !== out.width || canvas.height !== out.height) {
         canvas.width = out.width;
         canvas.height = out.height;
-        PO.render.render(ctx, office, t, view);
+        AY.render.render(ctx, office, t, view);
       }
       hits = out.hits;
     } else if (!lastError) {
@@ -120,12 +120,12 @@
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = '#9aa0b4';
       ctx.font = '13px "Courier New", monospace';
-      ctx.fillText('loading WONKYARD office…', 20, 24);
+      ctx.fillText('loading Agentyard…', 20, 24);
     }
     requestAnimationFrame(frame);
   }
 
-  canvas.width = PO.render.WIDTH;
+  canvas.width = AY.render.WIDTH;
   canvas.height = 600;
   setStatus('connecting…');
   poll();

@@ -2,13 +2,13 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run Pixel Office Extension",
+      "name": "Run Agentyard Extension",
       "type": "extensionHost",
       "request": "launch",
       "args": ["--extensionDevelopmentPath=${workspaceFolder}"]
     },
     {
-      "name": "Run against the WONKYARD company repo",
+      "name": "Run against the company repo",
       "type": "extensionHost",
       "request": "launch",
       "args": [

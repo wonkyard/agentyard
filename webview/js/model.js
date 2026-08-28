@@ -57,6 +57,6 @@
     return { dataMode: raw.dataMode || 'workspace', departments, annexes, board, counts };
   }
 
-  root.PO = root.PO || {};
-  root.PO.model = { build };
+  root.AY = root.AY || {};
+  root.AY.model = { build };
 })(window);

@@ -1,7 +1,8 @@
 // Headless smoke test. Runs entirely against the bundled SYNTHETIC fixtures in
 // dev-data/ — no real data, no browser, no network. Parses the fake agent files,
 // opens dev-data/demo.db through the SAME sql.js build the webview uses, builds
-// the office model, and runs one render pass against a recording canvas stub.
+// the office model, runs one render pass against a recording canvas stub, and
+// checks the extension manifest wires up the bottom-panel view.
 //
 //   npm run sanity
 
@@ -79,7 +80,8 @@ for (const f of ['js/palette.js', 'js/sprites.js', 'js/model.js', 'js/render.js'
   const code = fs.readFileSync(path.join(EXT_ROOT, 'webview', f), 'utf8');
   new Function('window', 'self', 'globalThis', code)(win, win, win);
 }
-const office = win.PO.model.build(
+check('webview namespace is AY', !!win.AY && !!win.AY.render && !!win.AY.sprites);
+const office = win.AY.model.build(
   { departments, teamRoles, dataMode: 'demo' },
   { projects, statuses }
 );
@@ -105,7 +107,7 @@ const ctx = new Proxy(
 );
 let out;
 try {
-  out = win.PO.render.render(ctx, office, 1234, { selectedId: 'dept:' + departments[0].name });
+  out = win.AY.render.render(ctx, office, 1234, { selectedId: 'dept:' + departments[0].name });
   check('render() runs without throwing', true);
 } catch (e) {
   check('render() runs without throwing', false, e.message + '\n' + e.stack);
@@ -118,7 +120,50 @@ if (out) {
     out.hits.length + ' rects'
   );
   check('selected room drew a highlight', calls.strokeRect >= 1);
+  // a second pass at a later time must still work (animation is time-driven)
+  try {
+    win.AY.render.render(ctx, office, 99999, { selectedId: null });
+    check('render() is stable across time', true);
+  } catch (e) {
+    check('render() is stable across time', false, e.message);
+  }
 }
+
+// --- 5. extension manifest wires up the bottom-panel view ----------
+const pkg = JSON.parse(fs.readFileSync(path.join(EXT_ROOT, 'package.json'), 'utf8'));
+check('package name is agentyard', pkg.name === 'agentyard');
+check('displayName is Agentyard', pkg.displayName === 'Agentyard');
+check('publisher is wonkyard', pkg.publisher === 'wonkyard');
+check('activates onStartupFinished', (pkg.activationEvents || []).includes('onStartupFinished'));
+check('icon declared', pkg.icon === 'media/icon.png' && fs.existsSync(path.join(EXT_ROOT, pkg.icon)));
+const panelC = ((pkg.contributes || {}).viewsContainers || {}).panel || [];
+check('panel viewsContainer "agentyard"', panelC.some((c) => c.id === 'agentyard' && c.title === 'Agentyard'));
+const views = ((pkg.contributes || {}).views || {}).agentyard || [];
+check('webview view "agentyard.office"', views.some((v) => v.id === 'agentyard.office' && v.type === 'webview'));
+const cmds = ((pkg.contributes || {}).commands || []).map((c) => c.command);
+check('agentyard.focus command present', cmds.includes('agentyard.focus'));
+// needles assembled from parts so this test file itself stays grep-clean
+const OLD_NAME = ['pixel', 'office'].join('-');
+const OLD_CFG = 'pixel' + 'Office';
+const OLD_NS = 'P' + 'O_CONFIG';
+const legacyRe = new RegExp([OLD_NAME.replace('-', '.?'), OLD_CFG, OLD_NS].join('|'), 'i');
+check('no legacy config-key prefix', !JSON.stringify(pkg.contributes.configuration).includes(OLD_CFG));
+
+// --- 6. no legacy identifiers left in shipped code ----------------
+const shipped = ['extension.js', 'webview/index.html', 'webview/css/style.css',
+  'webview/js/palette.js', 'webview/js/sprites.js', 'webview/js/db.js', 'webview/js/adapter.js',
+  'webview/js/model.js', 'webview/js/render.js', 'webview/js/main.js'];
+let legacy = [];
+for (const f of shipped) {
+  const txt = fs.readFileSync(path.join(EXT_ROOT, f), 'utf8');
+  if (legacyRe.test(txt)) legacy.push(f);
+}
+check('no legacy identifiers in shipped code', legacy.length === 0, legacy.join(', '));
+check('extension registers WebviewViewProvider',
+  /registerWebviewViewProvider\(\s*['"]agentyard\.office['"]/.test(
+    fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8')));
+check('retainContextWhenHidden set',
+  /retainContextWhenHidden:\s*true/.test(fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8')));
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 process.exitCode = failures === 0 ? 0 : 1;

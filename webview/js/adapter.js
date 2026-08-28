@@ -37,7 +37,7 @@
   // ---- VS Code: the extension pushes snapshots via postMessage ------------
   function vscodeAdapter() {
     const vscode = root.acquireVsCodeApi();
-    const cfg = root.PO_CONFIG || {};
+    const cfg = root.AY_CONFIG || {};
     let latest = null;
     let waiters = [];
 
@@ -68,6 +68,6 @@
     };
   }
 
-  root.PO = root.PO || {};
-  root.PO.adapter = inVsCode ? vscodeAdapter() : browserAdapter();
+  root.AY = root.AY || {};
+  root.AY.adapter = inVsCode ? vscodeAdapter() : browserAdapter();
 })(window);

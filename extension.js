@@ -5,10 +5,6 @@ const fs = require('fs');
 const path = require('path');
 const { toDepartments } = require('./shared/frontmatter.js');
 
-let panel = null;
-let timer = null;
-let watchers = [];
-
 function nonce() {
   let s = '';
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -30,10 +26,10 @@ const DEMO = {
 };
 
 // Use real workspace data when the open folder actually has a company.db + agent
-// folder; otherwise fall back to the bundled synthetic demo so the extension
-// always renders something (first run, unrelated project, Marketplace preview).
+// folder; otherwise fall back to the bundled synthetic demo so the panel always
+// renders something (first run, unrelated project, Marketplace preview).
 function paths() {
-  const cfg = vscode.workspace.getConfiguration('pixelOffice');
+  const cfg = vscode.workspace.getConfiguration('agentyard');
   const pollSeconds = cfg.get('pollSeconds', 3);
   const root = workspaceRoot();
   if (!root) return { ...DEMO, pollSeconds };
@@ -74,18 +70,12 @@ function collectSnapshot() {
   };
 }
 
-function pushData() {
-  if (!panel) return;
-  const snap = collectSnapshot();
-  panel.webview.postMessage(snap);
-}
-
 function getHtml(webview, extUri) {
   const n = nonce();
   const asset = (...seg) =>
     webview.asWebviewUri(vscode.Uri.joinPath(extUri, 'webview', ...seg)).toString();
   const wasmUrl = asset('vendor', 'sql-wasm.wasm');
-  const cfg = vscode.workspace.getConfiguration('pixelOffice');
+  const cfg = vscode.workspace.getConfiguration('agentyard');
   const csp = [
     "default-src 'none'",
     `img-src ${webview.cspSource} data:`,
@@ -105,80 +95,102 @@ function getHtml(webview, extUri) {
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="${csp}" />
   <link rel="stylesheet" href="${asset('css', 'style.css')}" />
-  <title>WONKYARD Pixel Office</title>
+  <title>Agentyard</title>
 </head>
-<body>
+<body class="panel">
   <div id="app">
-    <div id="stage-wrap"><canvas id="scene" width="900" height="600"></canvas></div>
+    <div id="stage-wrap"><canvas id="scene" width="840" height="600"></canvas></div>
     <aside id="panel"></aside>
     <div id="status">connecting…</div>
   </div>
   <script nonce="${n}">
-    window.PO_CONFIG = { mode: 'vscode', pollSeconds: ${JSON.stringify(cfg.get('pollSeconds', 3))}, wasmUrl: ${JSON.stringify(wasmUrl)} };
+    window.AY_CONFIG = { mode: 'vscode', pollSeconds: ${JSON.stringify(cfg.get('pollSeconds', 3))}, wasmUrl: ${JSON.stringify(wasmUrl)} };
   </script>
   ${scripts}
 </body>
 </html>`;
 }
 
-function disposeWatchers() {
-  watchers.forEach((w) => w.dispose());
-  watchers = [];
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
+// One WebviewView living in the bottom panel. Registered on activation; the tab
+// itself is contributed via package.json and shows up as soon as VS Code starts.
+class OfficeViewProvider {
+  constructor(context) {
+    this.context = context;
+    this.view = null;
+    this.timer = null;
+    this.watchers = [];
   }
-}
 
-function openPanel(context) {
-  if (panel) {
-    panel.reveal(vscode.ViewColumn.Active);
-    return;
+  pushData() {
+    if (!this.view) return;
+    this.view.webview.postMessage(collectSnapshot());
   }
-  panel = vscode.window.createWebviewPanel(
-    'pixelOffice',
-    'WONKYARD Pixel Office',
-    vscode.ViewColumn.Active,
-    {
+
+  stop() {
+    this.watchers.forEach((w) => w.dispose());
+    this.watchers = [];
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  startWatchers() {
+    this.stop();
+    const p = paths();
+    this.timer = setInterval(() => this.pushData(), Math.max(1000, p.pollSeconds * 1000));
+    if (p.watch) {
+      for (const target of [p.db, path.join(p.depts, '*.md'), path.join(p.team, '*.md')]) {
+        const w = vscode.workspace.createFileSystemWatcher(target);
+        w.onDidChange(() => this.pushData());
+        w.onDidCreate(() => this.pushData());
+        w.onDidDelete(() => this.pushData());
+        this.watchers.push(w);
+      }
+    }
+  }
+
+  resolveWebviewView(webviewView) {
+    this.view = webviewView;
+    webviewView.webview.options = {
       enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'webview')],
-    }
-  );
-  panel.webview.html = getHtml(panel.webview, context.extensionUri);
+      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'webview')],
+    };
+    webviewView.webview.html = getHtml(webviewView.webview, this.context.extensionUri);
 
-  panel.webview.onDidReceiveMessage((msg) => {
-    if (msg && (msg.type === 'ready' || msg.type === 'poll')) pushData();
-  });
+    webviewView.webview.onDidReceiveMessage((msg) => {
+      if (msg && (msg.type === 'ready' || msg.type === 'poll')) this.pushData();
+    });
 
-  const p = paths();
-  timer = setInterval(pushData, Math.max(1000, p.pollSeconds * 1000));
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) this.pushData();
+    });
 
-  if (p.watch) {
-    for (const target of [p.db, path.join(p.depts, '*.md'), path.join(p.team, '*.md')]) {
-      const w = vscode.workspace.createFileSystemWatcher(target);
-      w.onDidChange(pushData);
-      w.onDidCreate(pushData);
-      w.onDidDelete(pushData);
-      watchers.push(w);
-    }
+    webviewView.onDidDispose(() => {
+      this.stop();
+      this.view = null;
+    });
+
+    this.startWatchers();
+    this.pushData();
   }
-
-  panel.onDidDispose(() => {
-    panel = null;
-    disposeWatchers();
-  });
 }
 
 function activate(context) {
+  const provider = new OfficeViewProvider(context);
   context.subscriptions.push(
-    vscode.commands.registerCommand('pixelOffice.open', () => openPanel(context))
+    vscode.window.registerWebviewViewProvider('agentyard.office', provider, {
+      webviewOptions: { retainContextWhenHidden: true },
+    })
   );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('agentyard.focus', () => {
+      vscode.commands.executeCommand('agentyard.office.focus');
+    })
+  );
+  context.subscriptions.push({ dispose: () => provider.stop() });
 }
 
-function deactivate() {
-  disposeWatchers();
-  if (panel) panel.dispose();
-}
+function deactivate() {}
 
 module.exports = { activate, deactivate };
