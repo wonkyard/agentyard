@@ -259,6 +259,15 @@ async function enableLiveMode() {
     }
     if (text.trim()) fs.writeFileSync(USER_SETTINGS + '.agentyard-backup', text);
     const parsed = hooksConfig.parseLenient(text);
+    // Don't rewrite a settings.json we couldn't understand — we'd drop the user's
+    // other keys. Bail and let them fix the file (or point us at a good one).
+    if (text.trim() && text.trim() !== '{}' && Object.keys(parsed).length === 0) {
+      vscode.window.showErrorMessage(
+        'Agentyard could not parse ~/.claude/settings.json, so it will not modify it. ' +
+          'Fix the JSON there and try again.'
+      );
+      return;
+    }
     const merged = hooksConfig.mergeHooks(parsed, scriptForCmd);
     fs.writeFileSync(USER_SETTINGS, JSON.stringify(merged, null, 2) + '\n');
     vscode.window.showInformationMessage(
@@ -287,7 +296,15 @@ async function disableLiveMode() {
     if (!hooksConfig.textHasOurHooks(text)) continue;
     try {
       if (text.trim()) fs.writeFileSync(p + '.agentyard-backup', text);
-      const cleaned = hooksConfig.removeHooks(hooksConfig.parseLenient(text));
+      const parsed = hooksConfig.parseLenient(text);
+      if (text.trim() && text.trim() !== '{}' && Object.keys(parsed).length === 0) {
+        vscode.window.showErrorMessage(
+          'Agentyard could not parse ' + p + ', so it will not modify it. Remove its ' +
+            'hook entries manually (lines mentioning agentyard-hook.mjs).'
+        );
+        continue;
+      }
+      const cleaned = hooksConfig.removeHooks(parsed);
       fs.writeFileSync(p, JSON.stringify(cleaned, null, 2) + '\n');
       touched++;
     } catch (e) {
