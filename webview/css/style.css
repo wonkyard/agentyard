@@ -82,6 +82,49 @@ html, body {
 #run-pane[hidden] { display: none; }
 
 /* ---- run view ------------------------------------------------------- */
+#run-notice {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: #ffd166;
+  background: #1c1a12;
+  border-bottom: 1px solid var(--line);
+  padding: 6px 10px;
+  line-height: 1.4;
+}
+#run-notice[hidden] { display: none; }
+
+/* embedded terminal (agentyard.runView = "terminal") */
+#run-term {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: #10121a;
+  padding: 4px 6px 0;
+}
+#run-term[hidden] { display: none; }
+#run-term .xterm { height: 100%; }
+#run-term-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  padding: 5px 8px;
+}
+#run-term-foot[hidden] { display: none; }
+#run-term-new {
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 10px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+#run-term-meta { font-size: 9px; color: var(--dim); }
+
 #run-feed {
   flex: 1 1 auto;
   min-height: 0;
@@ -91,6 +134,8 @@ html, body {
   line-height: 1.45;
   background: #10121a;
 }
+#run-feed[hidden] { display: none; }
+#run-bar[hidden] { display: none; }
 .feed-ln { margin: 0 0 7px; }
 .feed-ln-head { white-space: pre-wrap; word-break: break-word; }
 .feed-ln-body {

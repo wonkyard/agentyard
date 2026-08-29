@@ -43,3 +43,39 @@ daily-reporter -> runs when the company asks "what did you do", produces reports
 - Reports go in `reports/<agent>/<date>.md` (daily reports in `reports/daily/<date>.md`).
 - Keep recommendations grounded in something actually found — real version numbers, real
   competitor features, real commits. Never speculate as fact.
+
+## Maintenance: the embedded terminal (node-pty)
+
+The Run view's terminal (v0.5+) has one real maintenance cost: **`node-pty` is a
+native module and must match the Node/Electron ABI that VS Code runs.**
+
+- We depend on `@homebridge/node-pty-prebuilt-multiarch`, pinned exactly in
+  `package.json`. It ships prebuilt binaries inside the npm package for many
+  ABIs. xterm.js / addon-fit are pinned there too and vendored into
+  `webview/vendor/` by `npm run vendor` (same as sql.js) — no CDN, ever.
+- **What ships in the `.vsix`:** `.vscodeignore` re-includes
+  `node_modules/@homebridge/node-pty-prebuilt-multiarch/**` and drops only its
+  dev weight (`src/`, `scripts/`, `binding.gyp`, `*.pdb`, `*.map`). Always check
+  `vsce ls` before publishing: the `build/Release/*.node` (Windows) and
+  `prebuilds/<platform>-<arch>/*.node` (others) for your target platforms must
+  be present, and nothing from `dev-data/real/`, `reports/`, `.env`, or `state/`.
+- **When VS Code bumps its Electron engine** (`engines.vscode` in `package.json`)
+  the shipped prebuilds may no longer cover the new ABI. On a networked machine:
+
+  ```
+  # find the Electron/ABI VS Code now uses:  Help → About  (or `process.versions`)
+  npm install                                  # refetches prebuilds for this host
+  npx prebuild-install \
+    -r electron -t <electron-version> \
+    --platform <win32|darwin|linux> --arch <x64|arm64> \
+    -d node_modules/@homebridge/node-pty-prebuilt-multiarch
+  # repeat --platform/--arch per target, then `vsce ls` to confirm, then package
+  ```
+
+  If a prebuild genuinely isn't available, the graceful-degradation path in
+  `extension.js` (try/catch around `require`, `agentyard.runView` auto-falls to
+  `headless`) keeps the extension working — that is the safety net, not an
+  excuse to ship a broken terminal.
+- **Do not** switch to plain `node-pty` with an `electron-rebuild` step in CI
+  without updating this section and `README`'s *How it's built* — a hidden build
+  requirement is exactly what this note exists to prevent.

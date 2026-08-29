@@ -26,10 +26,14 @@
       runPane.hidden = !wantRun;
       for (const b of bar.querySelectorAll('button')) b.classList.toggle('on', b === btn);
       if (!wantRun) requestAnimationFrame(frame); // repaint immediately on return
+      else if (AY.term && AY.term.fit) AY.term.fit(); // size xterm to the now-visible pane
     });
   })();
   if (AY.run && AY.run.init) {
     try { AY.run.init(); } catch (e) { /* run view is optional */ }
+  }
+  if (AY.term && AY.term.init) {
+    try { AY.term.init(); } catch (e) { /* terminal view is optional */ }
   }
 
   // Supersample: render the scene at SS× the logical size and let the browser
