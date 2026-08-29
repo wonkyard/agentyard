@@ -922,6 +922,7 @@ function collectSnapshot(live) {
     hooksInstalled: hooksInstalled(),
     idleSeconds: cfg.get('idleSeconds', 30),
     staleMinutes: cfg.get('staleMinutes', 15),
+    staleWorkingHours: cfg.get('staleWorkingHours', 3),
     maxSpritesPerRoom: cfg.get('maxSpritesPerRoom', 8),
     platform: process.platform, // §7: case-insensitive local_path match on win32
     nowMs: Date.now(),

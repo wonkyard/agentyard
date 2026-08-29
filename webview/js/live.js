@@ -20,14 +20,33 @@
   const TOOL_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure']);
   const CC_BUILTINS = ['Explore', 'Plan', 'general-purpose', 'Task'];
 
+  // Optional build-target marker the in-process repo-team-runner echoes ONCE at
+  // the start of a build (and never again):
+  //   [agentyard] build TOOL-20260828-1008   (also "building" / "target")
+  // The office keys annex attribution on this because the in-process runner is a
+  // subagent of the company session — its hook `cwd` stays at the company root
+  // and never enters the repo it is building, so cwd matching cannot work.
+  // Returns the next token verbatim (id or slug), case preserved.
+  function buildTargetFromText(s) {
+    if (!s) return null;
+    const str = String(s);
+    const at = str.indexOf('[agentyard]');
+    if (at === -1) return null;
+    const m = str.slice(at + '[agentyard]'.length)
+      .match(/^\s*["']?\s*(?:build|building|target)\s+["']?([A-Za-z0-9._-]+)/i);
+    return m ? m[1] : null;
+  }
+
   // Optional phase marker a repo build runner may echo at each role handoff:
   //   [agentyard] project-lead -> project-eng   (or "→", or just "[agentyard] project-eng")
-  // The office lights the last role-like token named after the tag.
+  // The office lights the last role-like token named after the tag. A
+  // "[agentyard] build <id>" marker is a build target, not a phase — never a role.
   function phaseFromText(s) {
     if (!s) return null;
     const str = String(s);
     const at = str.indexOf('[agentyard]');
     if (at === -1) return null;
+    if (buildTargetFromText(str)) return null;
     const tokens = str.slice(at + '[agentyard]'.length).match(/[a-z][a-z-]*[a-z]/gi);
     if (!tokens || !tokens.length) return null;
     return tokens[tokens.length - 1].toLowerCase();
@@ -117,6 +136,7 @@
           permissionTs: 0,
           permissionTool: null,
           phase: null, // latest "[agentyard] <role>" marker, if the runner echoes one
+          buildTarget: null, // "[agentyard] build <id>" marker -> project id / slug
           ended: false,
           endedTs: 0,
         };
@@ -209,6 +229,8 @@
         a.lastToolFailed = name === 'PostToolUseFailure';
         const ph = phaseFromText(e.tool_input_summary);
         if (ph) a.phase = ph;
+        const bt = buildTargetFromText(e.tool_input_summary);
+        if (bt) a.buildTarget = bt; // latest wins
         if (name === 'PostToolUse' || name === 'PostToolUseFailure') {
           a.pendingPermission = false;
         }
@@ -268,6 +290,7 @@
         note: doingLine(a),
         tool: a.lastTool ? a.lastTool.name : null,
         phase: a.phase || null,
+        buildTarget: a.buildTarget || null,
         ts: lastTs ? new Date(lastTs).toISOString() : null,
         leaving: !!endedTs,
       });
@@ -309,7 +332,7 @@
   }
 
   return {
-    resolve, dataMode, CC_BUILTINS,
+    resolve, dataMode, CC_BUILTINS, phaseFromText, buildTargetFromText,
     DEFAULT_IDLE_SECONDS, LINGER_MS, LIVE_WINDOW_MS, DEFAULT_STALE_MS,
   };
 });

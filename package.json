@@ -2,7 +2,7 @@
   "name": "agentyard",
   "displayName": "Agentyard",
   "description": "A pixel-art view of your agent company, in the VS Code panel.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "wonkyard",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -103,6 +103,11 @@
           "type": "number",
           "default": 15,
           "description": "A live agent that never reported finishing and has had no activity for this many minutes is treated as a zombie (its VS Code was force-closed mid-run) and dropped from the scene. 0 disables the check."
+        },
+        "agentyard.staleWorkingHours": {
+          "type": "number",
+          "default": 3,
+          "description": "A company.db status_log 'working' row older than this many hours renders as idle (the session likely ended without logging idle). 0 disables."
         },
         "agentyard.maxSpritesPerRoom": {
           "type": "number",

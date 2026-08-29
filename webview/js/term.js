@@ -112,7 +112,13 @@
       hasSelection: () => term.hasSelection(),
       getSelection: () => term.getSelection(),
       copy: (text) => { if (text) adapter.clipWrite(text); },
-      paste: () => { pendingPaste = true; adapter.clipRead(); },
+      // No arg: read the system clipboard and paste it. With a string (the
+      // Ctrl+Shift+Enter soft newline): paste that text directly, bracketed.
+      paste: (text) => {
+        if (typeof text === 'string') { term.paste(text); return; }
+        pendingPaste = true;
+        adapter.clipRead();
+      },
     };
     if (typeof clip.keyHandler === 'function') {
       term.attachCustomKeyEventHandler((e) => clip.keyHandler(e, clipIo));

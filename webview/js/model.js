@@ -1,14 +1,34 @@
 // Merges raw inputs (agent .md frontmatter + company.db rows + live hook events)
 // into the single "office" object the renderer draws.
 (function (root) {
-  function latestStatus(statuses, predicate) {
+  // company.db writes `datetime('now')` -> "YYYY-MM-DD HH:MM:SS" in UTC.
+  // Returns NaN for null / any unexpected shape; callers treat NaN as "cannot
+  // date this row" and leave it untouched.
+  function parseDbTs(ts) {
+    if (ts == null) return NaN;
+    return Date.parse(String(ts).replace(' ', 'T') + 'Z');
+  }
+
+  // Newest matching status_log row per department / annex role. `opts` (optional):
+  //   { nowMs, staleWorkingMs } — when the newest row is `working` but its `ts`
+  //   is older than nowMs - staleWorkingMs, render it as `idle` instead (the
+  //   session likely ended without logging that it finished). Same convention as
+  //   live.js `staleMs`: a value <= 0 disables the horizon. `note` and `ts` are
+  //   kept as-is so the info panel still shows what it was last doing.
+  function latestStatus(statuses, predicate, opts) {
     let best = null;
     for (const s of statuses) {
       if (!predicate(s)) continue;
       if (!best || String(s.ts) > String(best.ts)) best = s;
     }
     if (!best) return { status: 'idle', note: null, ts: null, projectId: null };
-    return { status: best.status || 'idle', note: best.note, ts: best.ts, projectId: best.project_id };
+    let status = best.status || 'idle';
+    const o = opts || {};
+    if (status === 'working' && o.staleWorkingMs > 0) {
+      const t = parseDbTs(best.ts);
+      if (!isNaN(t) && t < (o.nowMs || Date.now()) - o.staleWorkingMs) status = 'idle';
+    }
+    return { status, note: best.note, ts: best.ts, projectId: best.project_id };
   }
 
   function slugFromRepo(url) {
@@ -18,14 +38,26 @@
 
   // ---- §7: attribute an in-repo build runner to its project's annex -----
   // The Chief of Staff dispatches a build into a split repo; an in-process
-  // runner acts as that repo's project-lead -> project-eng -> release-check
-  // inside `projects.local_path`. When we can see that (a live subagent whose
-  // cwd resolves inside a project's local_path, or the repo-build runner type),
-  // that project's annex team is the one working right now — not idle.
+  // runner acts as that repo's project-lead -> project-eng -> release-check.
+  // The runner echoes "[agentyard] build <project_id-or-slug>" once at the
+  // start (live.js -> a.buildTarget); that is the primary signal, because the
+  // in-process runner's hook cwd never leaves the company root. Falling back:
+  // a live subagent whose cwd resolves inside a project's local_path, or a
+  // lone repo-runner-typed subagent. Either way that project's annex team is
+  // the one working right now — not idle.
   const REPO_RUNNER_TYPES = new Set(['repo-team-runner', 'repo-build-runner']);
 
   function normPath(s) {
     return String(s || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  }
+
+  function pathBasename(s) {
+    const n = normPath(s);
+    return n ? n.split('/').pop() : null;
+  }
+
+  function eqCI(x, y) {
+    return !!x && !!y && String(x).toLowerCase() === String(y).toLowerCase();
   }
 
   // Is `child` the same as, or nested inside, `parent`? Slash-normalised, and
@@ -51,23 +83,45 @@
     return r === tail || r.endsWith('-' + tail) || r.indexOf(tail) !== -1;
   }
 
-  // Map each project that has a local_path to the freshest live runner agent
-  // building it. Empty when there is no company.db / no local_path / no match —
-  // callers then keep today's behaviour (loose runner sprite).
+  // Map each split-repo project to the freshest live runner agent building it.
+  // Empty when there is no company.db / no runner / no match — callers then keep
+  // today's behaviour (loose runner sprite).
   function attributeRunners(liveAgents, projects, platform) {
-    const withPath = projects.filter((p) => p.repo_url && p.local_path);
+    const candidates = projects.filter((p) => p.repo_url);
     const hits = new Map();
-    if (!withPath.length) return hits;
-    for (const a of liveAgents) {
-      if (a.kind !== 'subagent' || a.leaving) continue;
-      const proj =
-        withPath.find((p) => pathInside(a.cwd, p.local_path, platform)) ||
-        (REPO_RUNNER_TYPES.has(a.type) && withPath.length === 1 ? withPath[0] : null);
-      if (!proj) continue;
-      const cur = hits.get(proj.project_id);
-      if (!cur || String(a.ts || '') > String(cur.agent.ts || '')) {
-        hits.set(proj.project_id, { agent: a, phase: a.phase || null });
+    if (!candidates.length) return hits;
+    const runners = (liveAgents || []).filter((a) => a.kind === 'subagent' && !a.leaving);
+    if (!runners.length) return hits;
+
+    const fresher = (a, b) => !b || String(a.ts || '') > String(b.ts || '');
+
+    for (const p of candidates) {
+      const slug = slugFromRepo(p.repo_url);
+      const base = p.local_path ? pathBasename(p.local_path) : null;
+      let best = null;
+
+      for (const a of runners) {
+        let match = false;
+        if (a.buildTarget) {
+          // 1. explicit marker: exact project id, or CI slug / local_path basename
+          match = a.buildTarget === p.project_id || eqCI(a.buildTarget, slug) || eqCI(a.buildTarget, base);
+        } else if (p.local_path && pathInside(a.cwd, p.local_path, platform)) {
+          // 2. no marker: a subagent running tools inside the repo's local_path
+          match = true;
+        }
+        if (match && fresher(a, best)) best = a;
       }
+
+      // 3. no marker / cwd match anywhere: a lone repo-runner-typed subagent that
+      //    did not name a different target, when there is exactly one split-repo
+      //    project to attribute it to.
+      if (!best && candidates.length === 1) {
+        for (const a of runners) {
+          if (!a.buildTarget && REPO_RUNNER_TYPES.has(a.type) && fresher(a, best)) best = a;
+        }
+      }
+
+      if (best) hits.set(p.project_id, { agent: best, phase: best.phase || null });
     }
     return hits;
   }
@@ -83,6 +137,16 @@
     const staleMs = raw.staleMs != null
       ? raw.staleMs
       : (raw.staleMinutes != null ? raw.staleMinutes * 60000 : undefined);
+    // company.db-layer horizon: a `working` status_log row older than this reads
+    // as idle (a session that ended without logging idle). Default 3h;
+    // `staleWorkingMs` (tests) wins; <= 0 disables. Demo mode ships a fixed
+    // fixture with frozen timestamps, so the horizon is off there — otherwise
+    // every demo desk would read idle the moment the fixture aged past 3h.
+    const staleWorkingMs = raw.dataMode === 'demo'
+      ? 0
+      : (raw.staleWorkingMs != null
+        ? raw.staleWorkingMs
+        : (raw.staleWorkingHours != null ? raw.staleWorkingHours * 3600000 : 3 * 3600000));
 
     // ---- live activity ------------------------------------------------
     const live = root.AY && root.AY.live
@@ -100,7 +164,7 @@
     // ---- HQ departments (files) + optional live overlay --------------
     const deptNames = new Set((raw.departments || []).map((d) => d.name));
     const departments = (raw.departments || []).map((d) => {
-      const st = latestStatus(statuses, (s) => s.department === d.name);
+      const st = latestStatus(statuses, (s) => s.department === d.name, { nowMs, staleWorkingMs });
       const lv = liveByType.get(d.name);
       if (lv && !lv.leaving) {
         return { ...d, status: lv.status, note: lv.doing, ts: lv.ts, projectId: null, live: true };
@@ -119,7 +183,8 @@
         team: teamRoles.map((r) => {
           const st = latestStatus(
             statuses,
-            (s) => s.project_id === p.project_id && s.department === r.name
+            (s) => s.project_id === p.project_id && s.department === r.name,
+            { nowMs, staleWorkingMs }
           );
           return { ...r, ...st };
         }),

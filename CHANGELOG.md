@@ -2,6 +2,22 @@
 
 All notable changes to Agentyard are recorded here.
 
+## 1.0.1
+
+- Office view: a company.db `working` status older than `agentyard.staleWorkingHours`
+  (default 3h) now renders as idle, so a department no longer sits at its desk forever when a
+  session ends without logging that it finished.
+- Run-view terminal: `Ctrl+Shift+Enter` (`Cmd+Shift+Enter` on macOS) inserts a
+  newline into the current input line instead of submitting it, for multi-line
+  prompts. Plain `Enter` still submits. Gated by `agentyard.terminalCopyPaste`.
+- Office view: a project's annex team (`project-lead` / `project-eng` /
+  `release-check`) now lights up while `repo-team-runner` builds that repo, keyed
+  on an `[agentyard] build <id>` marker the runner echoes. The in-process runner
+  stays a subagent of the company session, so its working directory never enters
+  the repo and can't identify which project is being built — the marker names it
+  directly (by project id, repo slug, or local-path name). The older
+  working-directory and single-repo matching still apply as fallbacks.
+
 ## 1.0.0
 
 - **First public VS Code Marketplace release.**
