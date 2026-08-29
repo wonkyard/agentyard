@@ -17,7 +17,11 @@ Built by the Founder for their own use while running an agent-driven company.
 
 A header toggle switches between the office scene and a **Run** view — a real
 embedded terminal running an interactive Claude Code session in the workspace
-folder, using your existing CLI login (no API key). It behaves exactly like the
+folder, using your existing CLI login (no API key).
+
+![the run view](media/screenshots/run-view.png)
+
+It behaves exactly like the
 Claude Code terminal: permission prompts appear **in the panel** and you answer
 `y/n` there, follow-up messages continue the **same** session, plan mode works.
 **New thread** kills the session and starts fresh. Closing the panel or
