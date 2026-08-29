@@ -64,6 +64,7 @@
           liveEvents: live.events || [],
           hooksInstalled: !!live.hooksInstalled,
           nowMs: Date.now(),
+          staleWorkingHours: agents.staleWorkingHours, // optional; model defaults to 3h
         };
       },
     };
@@ -118,6 +119,7 @@
         idleSeconds: msg.idleSeconds || 30,
         maxSpritesPerRoom: msg.maxSpritesPerRoom || 8,
         platform: msg.platform || null, // §7: local_path match case-sensitivity
+        staleWorkingHours: msg.staleWorkingHours, // optional; model defaults to 3h
       };
       const w = waiters;
       waiters = [];

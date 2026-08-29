@@ -31,6 +31,19 @@
     const primary = mac ? !!ev.metaKey : !!ev.ctrlKey;
     const key = String(ev.key || '').toLowerCase();
 
+    // ---- soft newline ---------------------------------------------------
+    // Ctrl+Shift+Enter (Cmd+Shift+Enter on macOS) inserts a literal newline
+    // into the current input line instead of submitting it. io.paste('\n')
+    // routes through term.paste, whose bracketed-paste framing the claude CLI
+    // treats as literal text — so the newline lands in the buffer without
+    // submitting, same as pasting a multi-line block. Plain Enter and plain
+    // Shift+Enter are left untouched (some shells already treat the latter
+    // specially — only the explicit chord is ours).
+    if (key === 'enter' && ev.shiftKey && (ev.ctrlKey || ev.metaKey)) {
+      if (io.paste) io.paste('\n');
+      return false;
+    }
+
     // ---- copy -------------------------------------------------------------
     // Ctrl/Cmd+C, and Ctrl+Shift+C as an always-copy for muscle memory.
     if (key === 'c' && (primary || (ev.ctrlKey && ev.shiftKey))) {

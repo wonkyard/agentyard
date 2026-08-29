@@ -185,7 +185,7 @@ check('run-view config props declared',
   !!cfgProps['agentyard.claudePermissionMode']);
 check('claudePermissionMode default is not a skip-permissions mode',
   cfgProps['agentyard.claudePermissionMode'].default === 'default');
-check('package version is 1.0.0', pkg.version === '1.0.0', pkg.version);
+check('package version is 1.0.1', pkg.version === '1.0.1', pkg.version);
 
 // --- 5b. v0.5 terminal: manifest wiring ---------------------------------
 check('runView config prop: enum terminal|headless, default terminal',
@@ -806,7 +806,7 @@ check('retainContextWhenHidden set',
 
 // --- 16. v1.0.0: manifest + extension wiring for clipboard/attach ----
 {
-  check('manifest: version is exactly 1.0.0', pkg.version === '1.0.0');
+  check('manifest: version is exactly 1.0.1', pkg.version === '1.0.1');
   check('manifest: keywords include "claude code" and "terminal"',
     Array.isArray(pkg.keywords) && pkg.keywords.includes('claude code') && pkg.keywords.includes('terminal'));
   check('manifest: galleryBanner is set (dark, #1e1e2e)',
@@ -991,6 +991,98 @@ check('retainContextWhenHidden set',
     cg ? JSON.stringify({ building: cg.building, doing: cg.buildDoing }) : 'no DEMO-0002 annex');
   check('demo sample: the runner is not also a loose live-sub room',
     !demoOffice.liveRooms.some((r) => r.title === 'repo-team-runner'));
+}
+
+// --- 19. v1.0.1: a stale `working` company.db status renders idle -------
+{
+  const M = win.AY.model;
+  const now = Date.parse('2026-08-29T12:00:00Z');
+  // company.db ts format: "YYYY-MM-DD HH:MM:SS" (UTC, no zone suffix)
+  const dbTs = (msAgo) => new Date(now - msAgo).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+  const HOUR = 3600000;
+  const dept = departments[0].name;
+
+  // workspace mode: demo mode deliberately disables this horizon (frozen fixture)
+  const mk = (rows, raw) => M.build(
+    Object.assign({ departments, teamRoles, dataMode: 'workspace', nowMs: now }, raw || {}),
+    { projects: [], statuses: rows }
+  );
+  const deptStatus = (office) => office.departments.find((d) => d.name === dept).status;
+
+  check('stale-working: a 5h-old `working` row with no later idle renders idle',
+    deptStatus(mk([{ department: dept, status: 'working', note: 'building x', ts: dbTs(5 * HOUR) }])) === 'idle');
+  check('stale-working: a 30-min-old `working` row still renders working',
+    deptStatus(mk([{ department: dept, status: 'working', note: 'building x', ts: dbTs(30 * 60000) }])) === 'working');
+  check('stale-working: an old `idle` row stays idle (unchanged)',
+    deptStatus(mk([{ department: dept, status: 'idle', note: 'done', ts: dbTs(5 * HOUR) }])) === 'idle');
+  check('stale-working: note + ts are preserved when a stale row is downgraded', (() => {
+    const d = mk([{ department: dept, status: 'working', note: 'building x', ts: dbTs(5 * HOUR) }])
+      .departments.find((x) => x.name === dept);
+    return d.status === 'idle' && d.note === 'building x' && /^2026-08-29 /.test(String(d.ts));
+  })());
+
+  check('stale-working: staleWorkingMs small -> a 2-min-old `working` row renders idle',
+    deptStatus(mk([{ department: dept, status: 'working', note: 'x', ts: dbTs(2 * 60000) }],
+      { staleWorkingMs: 60000 })) === 'idle');
+  check('stale-working: staleWorkingHours:0 disables the horizon (5h row stays working)',
+    deptStatus(mk([{ department: dept, status: 'working', note: 'x', ts: dbTs(5 * HOUR) }],
+      { staleWorkingHours: 0 })) === 'working');
+
+  check('stale-working: a `working` row with an unparseable ts is left working',
+    deptStatus(mk([{ department: dept, status: 'working', note: 'x', ts: 'not-a-date' }])) === 'working');
+  check('stale-working: a `working` row with a null ts is left working',
+    deptStatus(mk([{ department: dept, status: 'working', note: 'x', ts: null }])) === 'working');
+
+  {
+    const proj = { project_id: 'DEMO-SW', idea_summary: 'sw', current_stage: 'shipped',
+      updated_at: dbTs(0), repo_url: 'https://example.com/demo/sw', local_path: null };
+    const role = teamRoles[0].name;
+    const office = M.build(
+      { departments, teamRoles, dataMode: 'workspace', nowMs: now },
+      { projects: [proj],
+        statuses: [{ project_id: 'DEMO-SW', department: role, status: 'working', note: 'wiring', ts: dbTs(5 * HOUR) }] }
+    );
+    const seat = office.annexes[0].team.find((m) => m.name === role);
+    check('stale-working: the horizon reaches an annex team seat too',
+      seat && seat.status === 'idle', seat ? seat.status : 'no seat');
+  }
+
+  check('stale-working: demo mode disables the horizon (frozen fixture stays lively)',
+    M.build({ departments, teamRoles, dataMode: 'demo', nowMs: now },
+      { projects: [], statuses: [{ department: dept, status: 'working', note: 'x', ts: dbTs(50 * HOUR) }] })
+      .departments.find((d) => d.name === dept).status === 'working');
+}
+
+// --- 20. v1.0.1: Ctrl+Shift+Enter inserts a soft newline (no submit) ----
+{
+  const K = win.AY.termclip;
+  const mk = (over) => Object.assign(
+    { type: 'keydown', key: 'Enter', ctrlKey: false, shiftKey: false, metaKey: false }, over);
+  let pastedWith;
+  const io = (over) => Object.assign({
+    platform: 'linux', enabled: true,
+    hasSelection: () => false, getSelection: () => '',
+    copy: () => {}, paste: (t) => { pastedWith = t; },
+  }, over);
+
+  pastedWith = undefined;
+  check('newline: Ctrl+Shift+Enter pastes "\\n" and is swallowed',
+    K.keyHandler(mk({ ctrlKey: true, shiftKey: true }), io()) === false && pastedWith === '\n');
+  pastedWith = undefined;
+  check('newline: Cmd+Shift+Enter on macOS also pastes "\\n"',
+    K.keyHandler(mk({ metaKey: true, shiftKey: true }), io({ platform: 'darwin' })) === false && pastedWith === '\n');
+  pastedWith = undefined;
+  check('newline: a plain Enter passes through (submits)',
+    K.keyHandler(mk({}), io()) === true && pastedWith === undefined);
+  check('newline: a plain Shift+Enter is left as-is (passes through)',
+    K.keyHandler(mk({ shiftKey: true }), io()) === true);
+  check('newline: Ctrl+Enter without Shift passes through',
+    K.keyHandler(mk({ ctrlKey: true }), io()) === true);
+  pastedWith = undefined;
+  check('newline: Ctrl+Shift+Enter on keyup is ignored',
+    K.keyHandler(mk({ type: 'keyup', ctrlKey: true, shiftKey: true }), io()) === true && pastedWith === undefined);
+  check('newline: disabled config -> Ctrl+Shift+Enter passes through',
+    K.keyHandler(mk({ ctrlKey: true, shiftKey: true }), io({ enabled: false })) === true);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

@@ -1,14 +1,34 @@
 // Merges raw inputs (agent .md frontmatter + company.db rows + live hook events)
 // into the single "office" object the renderer draws.
 (function (root) {
-  function latestStatus(statuses, predicate) {
+  // company.db writes `datetime('now')` -> "YYYY-MM-DD HH:MM:SS" in UTC.
+  // Returns NaN for null / any unexpected shape; callers treat NaN as "cannot
+  // date this row" and leave it untouched.
+  function parseDbTs(ts) {
+    if (ts == null) return NaN;
+    return Date.parse(String(ts).replace(' ', 'T') + 'Z');
+  }
+
+  // Newest matching status_log row per department / annex role. `opts` (optional):
+  //   { nowMs, staleWorkingMs } — when the newest row is `working` but its `ts`
+  //   is older than nowMs - staleWorkingMs, render it as `idle` instead (the
+  //   session likely ended without logging that it finished). Same convention as
+  //   live.js `staleMs`: a value <= 0 disables the horizon. `note` and `ts` are
+  //   kept as-is so the info panel still shows what it was last doing.
+  function latestStatus(statuses, predicate, opts) {
     let best = null;
     for (const s of statuses) {
       if (!predicate(s)) continue;
       if (!best || String(s.ts) > String(best.ts)) best = s;
     }
     if (!best) return { status: 'idle', note: null, ts: null, projectId: null };
-    return { status: best.status || 'idle', note: best.note, ts: best.ts, projectId: best.project_id };
+    let status = best.status || 'idle';
+    const o = opts || {};
+    if (status === 'working' && o.staleWorkingMs > 0) {
+      const t = parseDbTs(best.ts);
+      if (!isNaN(t) && t < (o.nowMs || Date.now()) - o.staleWorkingMs) status = 'idle';
+    }
+    return { status, note: best.note, ts: best.ts, projectId: best.project_id };
   }
 
   function slugFromRepo(url) {
@@ -83,6 +103,16 @@
     const staleMs = raw.staleMs != null
       ? raw.staleMs
       : (raw.staleMinutes != null ? raw.staleMinutes * 60000 : undefined);
+    // company.db-layer horizon: a `working` status_log row older than this reads
+    // as idle (a session that ended without logging idle). Default 3h;
+    // `staleWorkingMs` (tests) wins; <= 0 disables. Demo mode ships a fixed
+    // fixture with frozen timestamps, so the horizon is off there — otherwise
+    // every demo desk would read idle the moment the fixture aged past 3h.
+    const staleWorkingMs = raw.dataMode === 'demo'
+      ? 0
+      : (raw.staleWorkingMs != null
+        ? raw.staleWorkingMs
+        : (raw.staleWorkingHours != null ? raw.staleWorkingHours * 3600000 : 3 * 3600000));
 
     // ---- live activity ------------------------------------------------
     const live = root.AY && root.AY.live
@@ -100,7 +130,7 @@
     // ---- HQ departments (files) + optional live overlay --------------
     const deptNames = new Set((raw.departments || []).map((d) => d.name));
     const departments = (raw.departments || []).map((d) => {
-      const st = latestStatus(statuses, (s) => s.department === d.name);
+      const st = latestStatus(statuses, (s) => s.department === d.name, { nowMs, staleWorkingMs });
       const lv = liveByType.get(d.name);
       if (lv && !lv.leaving) {
         return { ...d, status: lv.status, note: lv.doing, ts: lv.ts, projectId: null, live: true };
@@ -119,7 +149,8 @@
         team: teamRoles.map((r) => {
           const st = latestStatus(
             statuses,
-            (s) => s.project_id === p.project_id && s.department === r.name
+            (s) => s.project_id === p.project_id && s.department === r.name,
+            { nowMs, staleWorkingMs }
           );
           return { ...r, ...st };
         }),
