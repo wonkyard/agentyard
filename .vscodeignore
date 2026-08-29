@@ -6,6 +6,7 @@ reports/**
 dev-data/real/**
 dev-data/*.jsonl
 media/screenshots/*.psd
+media/screenshots/_*
 **/*.map
 *.vsix
 **/*.backup

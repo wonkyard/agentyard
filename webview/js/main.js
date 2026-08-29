@@ -10,6 +10,11 @@
   const panel = document.getElementById('panel');
   const statusEl = document.getElementById('status');
 
+  // Brand version in the topbar — same source as the canvas header (AY_CONFIG,
+  // injected from package.json by the host). Never a hardcoded string.
+  const verEl = document.getElementById('brand-ver');
+  if (verEl) verEl.textContent = cfg.version ? 'v' + cfg.version : '';
+
   // ---- office / run view toggle -----------------------------------------
   let officeVisible = true;
   (function wireToggle() {
@@ -17,17 +22,33 @@
     const officePane = document.getElementById('office-pane');
     const runPane = document.getElementById('run-pane');
     if (!bar || !officePane || !runPane) return;
-    bar.addEventListener('click', (e) => {
-      const btn = e.target.closest('button[data-view]');
-      if (!btn) return;
-      const wantRun = btn.dataset.view === 'run';
+
+    function showView(which) {
+      const wantRun = which === 'run';
       officeVisible = !wantRun;
       officePane.hidden = wantRun;
       runPane.hidden = !wantRun;
-      for (const b of bar.querySelectorAll('button')) b.classList.toggle('on', b === btn);
+      for (const b of bar.querySelectorAll('button')) {
+        b.classList.toggle('on', b.dataset.view === (wantRun ? 'run' : 'office'));
+      }
       if (!wantRun) requestAnimationFrame(frame); // repaint immediately on return
       else if (AY.term && AY.term.fit) AY.term.fit(); // size xterm to the now-visible pane
+    }
+
+    bar.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-view]');
+      if (btn) showView(btn.dataset.view);
     });
+
+    // location.hash is a portable dev/debug + headless-screenshot affordance:
+    // #run opens the Run view, #office (or empty) the Office view.
+    const fromHash = () => {
+      const h = (root.location && root.location.hash || '').replace(/^#/, '');
+      if (h === 'run' || h === 'office') showView(h);
+    };
+    root.addEventListener('hashchange', fromHash);
+    // after AY.run/AY.term init below, so #run can fit the terminal
+    requestAnimationFrame(fromHash);
   })();
   if (AY.run && AY.run.init) {
     try { AY.run.init(); } catch (e) { /* run view is optional */ }

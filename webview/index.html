@@ -10,7 +10,7 @@
 <body>
   <div id="app">
     <header id="topbar">
-      <span class="brand">AGENTYARD<span class="ver">v1.0</span></span>
+      <span class="brand">AGENTYARD<span class="ver" id="brand-ver"></span></span>
       <span id="view-toggle">
         <button type="button" data-view="office" class="on">Office</button>
         <button type="button" data-view="run">Run</button>
@@ -52,7 +52,9 @@
   <script>
     // The embedded terminal needs the extension host (node-pty), so the browser
     // dev server always previews the headless feed.
-    window.AY_CONFIG = window.AY_CONFIG || { mode: 'browser', pollSeconds: 3, wasmUrl: 'vendor/sql-wasm.wasm', runView: 'headless', runViewRequested: 'headless', ptyAvailable: false, platform: 'browser', terminalCopyPaste: true, copyOnSelection: false };
+    // scripts/dev-server.mjs replaces __AY_VERSION__ with package.json's version.
+    window.AY_CONFIG = window.AY_CONFIG || { mode: 'browser', version: '__AY_VERSION__', pollSeconds: 3, wasmUrl: 'vendor/sql-wasm.wasm', runView: 'headless', runViewRequested: 'headless', ptyAvailable: false, platform: 'browser', terminalCopyPaste: true, copyOnSelection: false };
+    if (window.AY_CONFIG.version === '__AY_VERSION__') window.AY_CONFIG.version = '';
     // ?shot -> lay the whole scene out flat for a full-page screenshot (dev only)
     if (location.search.indexOf('shot') !== -1) document.documentElement.className = 'shot';
     // ?view=run -> open the run view on load (dev / screenshot helper)

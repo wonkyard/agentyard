@@ -32,3 +32,9 @@
 {"ts":"2026-08-28T09:00:23.200Z","hook_event_name":"SubagentStart","session_id":"sess-alpha","cwd":"/Users/dev/acme-web","agent_id":"a-review-1","agent_type":"code-reviewer"}
 {"ts":"2026-08-28T09:00:24.000Z","hook_event_name":"PreToolUse","session_id":"sess-alpha","cwd":"/Users/dev/acme-web","agent_id":"a-review-1","agent_type":"code-reviewer","tool_name":"Read","tool_input_summary":"src/routes/api.ts"}
 {"ts":"2026-08-28T09:00:25.000Z","hook_event_name":"PostToolUseFailure","session_id":"sess-alpha","cwd":"/Users/dev/acme-web","agent_id":"a-plan-1","agent_type":"Plan","tool_name":"Read","tool_input_summary":"docs/architecture.md"}
+{"ts":"2026-08-28T09:00:26.000Z","hook_event_name":"SessionStart","session_id":"sess-yard","cwd":"/demo/workspace/company"}
+{"ts":"2026-08-28T09:00:26.500Z","hook_event_name":"UserPromptSubmit","session_id":"sess-yard","cwd":"/demo/workspace/company"}
+{"ts":"2026-08-28T09:00:27.000Z","hook_event_name":"SubagentStart","session_id":"sess-yard","cwd":"/demo/workspace/company","agent_id":"rtr-1","agent_type":"repo-team-runner"}
+{"ts":"2026-08-28T09:00:28.000Z","hook_event_name":"PreToolUse","session_id":"sess-yard","cwd":"/demo/workspace/cloud-garden","agent_id":"rtr-1","agent_type":"repo-team-runner","tool_name":"Read","tool_input_summary":"reports/backlog.md"}
+{"ts":"2026-08-28T09:00:29.500Z","hook_event_name":"PreToolUse","session_id":"sess-yard","cwd":"/demo/workspace/cloud-garden","agent_id":"rtr-1","agent_type":"repo-team-runner","tool_name":"Edit","tool_input_summary":"src/subscription/box.ts"}
+{"ts":"2026-08-28T09:00:31.000Z","hook_event_name":"PreToolUse","session_id":"sess-yard","cwd":"/demo/workspace/cloud-garden","agent_id":"rtr-1","agent_type":"repo-team-runner","tool_name":"Bash","tool_input_summary":"npm run sanity"}

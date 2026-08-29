@@ -36,6 +36,12 @@ All notable changes to Agentyard are recorded here.
   falls back to the previous behaviour. If the runner echoes a
   `[agentyard] project-lead -> project-eng` phase marker, only the matching seat
   lights up.
+- **Scene header shows the real version.** The `v…` in the office header (and the
+  panel topbar) is read from `package.json` via `AY_CONFIG`, not a hardcoded
+  string.
+- **Demo data shows a repo being built.** `npm run dev` now renders the
+  cloud-garden annex as `building…` — a synthetic `repo-team-runner` is working
+  inside its `local_path`.
 
 ## 0.5.0
 

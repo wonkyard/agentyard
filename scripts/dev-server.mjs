@@ -19,6 +19,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { toDepartments } = require('../shared/frontmatter.js');
 const { StreamJsonParser } = require('../shared/streamJson.js');
+const PKG_VERSION = require('../package.json').version;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EXT_ROOT = path.resolve(__dirname, '..');
@@ -130,12 +131,18 @@ function serveStatic(res, urlPath) {
       res.end('not found: ' + rel);
       return;
     }
+    // index.html carries an __AY_VERSION__ token in its fallback AY_CONFIG so the
+    // scene header shows the real version (same source as the extension host).
+    let body = buf;
+    if (rel === 'index.html') {
+      body = Buffer.from(buf.toString('utf8').replace(/__AY_VERSION__/g, PKG_VERSION));
+    }
     res.writeHead(200, {
       'Content-Type': MIME[path.extname(full)] || 'application/octet-stream',
-      'Content-Length': buf.length,
+      'Content-Length': body.length,
       'Cache-Control': 'no-store',
     });
-    res.end(buf);
+    res.end(body);
   });
 }
 
