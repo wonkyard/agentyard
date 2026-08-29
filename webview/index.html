@@ -10,7 +10,7 @@
 <body>
   <div id="app">
     <header id="topbar">
-      <span class="brand">AGENTYARD<span class="ver">v0.5</span></span>
+      <span class="brand">AGENTYARD<span class="ver">v1.0</span></span>
       <span id="view-toggle">
         <button type="button" data-view="office" class="on">Office</button>
         <button type="button" data-view="run">Run</button>
@@ -27,6 +27,7 @@
       <div id="run-notice" hidden></div>
       <div id="run-term" hidden></div>
       <div id="run-term-foot" hidden>
+        <button type="button" id="run-term-attach" class="attach-btn" title="Attach a file or image">📎 Attach</button>
         <button type="button" id="run-term-new">New thread</button>
         <span id="run-term-meta"></span>
       </div>
@@ -34,6 +35,7 @@
       <div id="run-bar">
         <div id="run-hint" hidden></div>
         <div id="run-input-row">
+          <button type="button" id="run-attach" class="attach-btn" title="Attach a file or image">📎</button>
           <textarea id="run-input" rows="1" placeholder="Send a prompt to Claude Code in this workspace…"></textarea>
           <button type="button" id="run-send">Send</button>
           <button type="button" id="run-cancel" hidden>Cancel</button>
@@ -50,7 +52,7 @@
   <script>
     // The embedded terminal needs the extension host (node-pty), so the browser
     // dev server always previews the headless feed.
-    window.AY_CONFIG = window.AY_CONFIG || { mode: 'browser', pollSeconds: 3, wasmUrl: 'vendor/sql-wasm.wasm', runView: 'headless', runViewRequested: 'headless', ptyAvailable: false };
+    window.AY_CONFIG = window.AY_CONFIG || { mode: 'browser', pollSeconds: 3, wasmUrl: 'vendor/sql-wasm.wasm', runView: 'headless', runViewRequested: 'headless', ptyAvailable: false, platform: 'browser', terminalCopyPaste: true, copyOnSelection: false };
     // ?shot -> lay the whole scene out flat for a full-page screenshot (dev only)
     if (location.search.indexOf('shot') !== -1) document.documentElement.className = 'shot';
     // ?view=run -> open the run view on load (dev / screenshot helper)
@@ -72,6 +74,7 @@
   <script src="js/live.js"></script>
   <script src="js/model.js"></script>
   <script src="js/render.js"></script>
+  <script src="js/termclip.js"></script>
   <script src="js/run.js"></script>
   <script src="js/term.js"></script>
   <script src="js/main.js"></script>

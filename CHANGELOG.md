@@ -2,6 +2,30 @@
 
 All notable changes to Agentyard are recorded here.
 
+## 1.0.0
+
+- **First public VS Code Marketplace release.**
+- **Terminal copy / paste.** The Run-view terminal now handles the clipboard.
+  `Ctrl+C` / `Cmd+C` copies the selection (and only sends SIGINT when nothing is
+  selected); `Ctrl+Shift+C` always copies; `Ctrl+V` / `Cmd+V` /
+  `Ctrl+Shift+V` / `Shift+Insert` paste; right-click copies or pastes.
+  Clipboard access goes through VS Code (`vscode.env.clipboard`), so it works
+  regardless of webview focus quirks. New settings
+  `agentyard.terminalCopyPaste` (default `true`) and `agentyard.copyOnSelection`
+  (default `false`).
+- **Attach a file.** A **📎 Attach** button on the Run view (both the terminal
+  and the headless feed) opens the native file picker and splices the selected
+  path(s) into the prompt — space-joined, quoted when a path contains spaces,
+  never submitted for you.
+- **Attach / paste an image.** Paste an image into the terminal or the input
+  box, or drag files onto the Run view. Pasted image bytes are written to
+  `<workspace>/.agentyard/tmp/` and the path is inserted, since Claude Code
+  reads images by path. New settings `agentyard.attachmentsDir` (default
+  `.agentyard/tmp`), `agentyard.keepAttachments` (default `false` — the folder
+  is cleared on Run-view init and **New thread**) and `agentyard.maxAttachmentMB`
+  (default `10`). Attachments are always written inside the first workspace
+  folder only, and the bytes are never logged.
+
 ## 0.5.0
 
 - **The Run view is now a real terminal.** Instead of a rendered feed of a

@@ -2,10 +2,24 @@
   "name": "agentyard",
   "displayName": "Agentyard",
   "description": "A pixel-art view of your agent company, in the VS Code panel.",
-  "version": "0.5.0",
+  "version": "1.0.0",
   "publisher": "wonkyard",
   "license": "MIT",
   "icon": "media/icon.png",
+  "keywords": [
+    "claude",
+    "claude code",
+    "agent",
+    "ai",
+    "monitor",
+    "panel",
+    "pixel art",
+    "terminal"
+  ],
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/wonkyard/agentyard.git"
@@ -127,6 +141,31 @@
           ],
           "default": "terminal",
           "description": "`terminal` (default) runs an interactive Claude Code session in a real embedded terminal — permission prompts are answered in the panel. `headless` keeps the older non-interactive `claude -p` feed. Agentyard falls back to `headless` automatically if the native terminal component cannot load on this platform."
+        },
+        "agentyard.terminalCopyPaste": {
+          "type": "boolean",
+          "default": true,
+          "description": "Handle Ctrl/Cmd+C (copy the selection, or pass through as SIGINT when nothing is selected), Ctrl+Shift+C (always copy), and Ctrl/Cmd+V / Ctrl+Shift+V / Shift+Insert (paste) in the Run-view terminal. Clipboard access goes through VS Code."
+        },
+        "agentyard.copyOnSelection": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, selecting text in the Run-view terminal copies it to the clipboard immediately (no Ctrl+C needed)."
+        },
+        "agentyard.attachmentsDir": {
+          "type": "string",
+          "default": ".agentyard/tmp",
+          "description": "Folder, relative to the first workspace folder, where the Run view writes pasted or dropped images before inserting their path into the prompt."
+        },
+        "agentyard.keepAttachments": {
+          "type": "boolean",
+          "default": false,
+          "description": "When false, Agentyard clears the attachments folder when the Run view initialises and on \"New thread\". Set true to keep pasted/dropped image files."
+        },
+        "agentyard.maxAttachmentMB": {
+          "type": "number",
+          "default": 10,
+          "description": "Reject a pasted or dropped attachment larger than this many megabytes."
         }
       }
     }

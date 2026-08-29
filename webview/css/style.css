@@ -125,6 +125,24 @@ html, body {
 }
 #run-term-meta { font-size: 9px; color: var(--dim); }
 
+/* 📎 attach button — subtle, on both the terminal foot and the headless input row */
+#run-term-foot .attach-btn,
+#run-input-row .attach-btn {
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 400;
+  padding: 3px 9px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+#run-term-foot .attach-btn:hover,
+#run-input-row .attach-btn:hover { color: var(--text); border-color: #3d465f; }
+#run-input-row .attach-btn { align-self: flex-end; padding: 5px 8px; }
+
 #run-feed {
   flex: 1 1 auto;
   min-height: 0;

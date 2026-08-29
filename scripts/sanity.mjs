@@ -95,13 +95,16 @@ const win = {
     querySelectorAll: () => [], addEventListener() {} },
 };
 win.window = win;
-for (const f of ['js/palette.js', 'js/sprites.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/run.js', 'js/term.js']) {
+for (const f of ['js/palette.js', 'js/sprites.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/termclip.js', 'js/run.js', 'js/term.js']) {
   const code = fs.readFileSync(path.join(EXT_ROOT, 'webview', f), 'utf8');
   new Function('window', 'self', 'globalThis', 'module', 'document', code)(win, win, win, undefined, win.document);
 }
 check('webview namespace is AY', !!win.AY && !!win.AY.render && !!win.AY.sprites && !!win.AY.live);
 check('run view module loaded', !!win.AY.run && typeof win.AY.run.describe === 'function');
 check('terminal view module loaded', !!win.AY.term && typeof win.AY.term.init === 'function');
+check('terminal clipboard module loaded',
+  !!win.AY.termclip && typeof win.AY.termclip.keyHandler === 'function' &&
+  typeof win.AY.termclip.firstImageFile === 'function');
 const office = win.AY.model.build(
   { departments, teamRoles, dataMode: 'demo' },
   { projects, statuses }
@@ -169,7 +172,7 @@ check('run-view config props declared',
   !!cfgProps['agentyard.claudePermissionMode']);
 check('claudePermissionMode default is not a skip-permissions mode',
   cfgProps['agentyard.claudePermissionMode'].default === 'default');
-check('package version is 0.5.x', /^0\.5\./.test(pkg.version), pkg.version);
+check('package version is 1.0.0', pkg.version === '1.0.0', pkg.version);
 
 // --- 5b. v0.5 terminal: manifest wiring ---------------------------------
 check('runView config prop: enum terminal|headless, default terminal',
@@ -250,8 +253,8 @@ check('no legacy config-key prefix', !JSON.stringify(pkg.contributes.configurati
 const shipped = ['extension.js', 'webview/index.html', 'webview/css/style.css',
   'webview/js/palette.js', 'webview/js/sprites.js', 'webview/js/db.js', 'webview/js/adapter.js',
   'webview/js/model.js', 'webview/js/render.js', 'webview/js/run.js', 'webview/js/term.js',
-  'webview/js/main.js', 'shared/claudeArgs.js', 'shared/winWrap.js', 'shared/streamJson.js',
-  'shared/killTree.js'];
+  'webview/js/termclip.js', 'webview/js/main.js', 'shared/claudeArgs.js', 'shared/winWrap.js',
+  'shared/streamJson.js', 'shared/killTree.js', 'shared/attach.js'];
 let legacy = [];
 for (const f of shipped) {
   const txt = fs.readFileSync(path.join(EXT_ROOT, f), 'utf8');
@@ -645,9 +648,16 @@ check('no legacy identifiers in shipped code', legacy.length === 0, legacy.join(
     detached: process.platform !== 'win32',
   });
   let grandPid = 0;
-  child.stdout.on('data', (d) => { grandPid = parseInt(String(d).trim(), 10) || grandPid; });
-
-  await new Promise((r) => setTimeout(r, 400));
+  const gotGrandPid = new Promise((resolve) => {
+    child.stdout.on('data', (d) => {
+      grandPid = parseInt(String(d).trim(), 10) || grandPid;
+      if (grandPid > 0) resolve();
+    });
+  });
+  // Wait for the grandchild to actually report its pid (bounded), not a fixed
+  // sleep — a busy machine can take well over 400ms to spawn a second node.
+  await Promise.race([gotGrandPid, new Promise((r) => setTimeout(r, 5000))]);
+  await new Promise((r) => setTimeout(r, 100));
   const parentPid = child.pid;
   check('cancel: test processes are alive before kill',
     isAlive(parentPid) && grandPid > 0 && isAlive(grandPid), 'parent=' + parentPid + ' grand=' + grandPid);
@@ -666,6 +676,163 @@ check('extension registers WebviewViewProvider',
     fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8')));
 check('retainContextWhenHidden set',
   /retainContextWhenHidden:\s*true/.test(fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8')));
+
+// --- 14. v1.0.0: Run-view terminal clipboard key handler -------------
+{
+  const K = win.AY.termclip;
+  const mk = (over) => Object.assign(
+    { type: 'keydown', key: 'c', ctrlKey: false, shiftKey: false, metaKey: false }, over);
+  let copied = null;
+  let pasted = 0;
+  const io = (over) => Object.assign({
+    platform: 'linux',
+    enabled: true,
+    hasSelection: () => false,
+    getSelection: () => 'THE SELECTION',
+    copy: (t) => { copied = t; },
+    paste: () => { pasted++; },
+  }, over);
+
+  copied = null;
+  check('key: Ctrl+C with a selection copies the selection and is swallowed',
+    K.keyHandler(mk({ ctrlKey: true }), io({ hasSelection: () => true })) === false &&
+    copied === 'THE SELECTION');
+  copied = null;
+  check('key: Ctrl+C with NO selection passes through (still SIGINT)',
+    K.keyHandler(mk({ ctrlKey: true }), io()) === true && copied === null);
+  check('key: Ctrl+Shift+C always copies, never SIGINT',
+    K.keyHandler(mk({ key: 'c', ctrlKey: true, shiftKey: true }), io()) === false);
+  pasted = 0;
+  check('key: Ctrl+V pastes and is swallowed',
+    K.keyHandler(mk({ key: 'v', ctrlKey: true }), io()) === false && pasted === 1);
+  check('key: Ctrl+Shift+V pastes', K.keyHandler(mk({ key: 'v', ctrlKey: true, shiftKey: true }), io()) === false);
+  check('key: Shift+Insert pastes', K.keyHandler(mk({ key: 'Insert', shiftKey: true }), io()) === false);
+  check('key: a plain letter is untouched', K.keyHandler(mk({ key: 'a' }), io()) === true);
+  check('key: keyup events are ignored',
+    K.keyHandler(mk({ type: 'keyup', key: 'v', ctrlKey: true }), io()) === true);
+  check('key: disabled -> everything passes through even with a selection',
+    K.keyHandler(mk({ key: 'c', ctrlKey: true }), io({ enabled: false, hasSelection: () => true })) === true);
+  copied = null;
+  check('key: Cmd+C on macOS with a selection copies',
+    K.keyHandler(mk({ key: 'c', metaKey: true }), io({ platform: 'darwin', hasSelection: () => true })) === false &&
+    copied === 'THE SELECTION');
+  check('key: plain Ctrl+C on macOS still passes through (SIGINT is Ctrl, not Cmd)',
+    K.keyHandler(mk({ key: 'c', ctrlKey: true }), io({ platform: 'darwin' })) === true);
+
+  check('termclip.firstImageFile: pulls an image/* file item out of a DataTransfer',
+    (() => {
+      const fakeFile = { type: 'image/png' };
+      const dt = { items: [{ kind: 'file', type: 'image/png', getAsFile: () => fakeFile }] };
+      return K.firstImageFile(dt) === fakeFile && K.firstImageFile({ items: [] }) === null;
+    })());
+}
+
+// --- 15. v1.0.0: attachment path-insert builder + image temp write ---
+{
+  const A = require('../shared/attach.js');
+
+  check('attach: a plain path is inserted unquoted',
+    A.buildPathInsert(['/home/dev/notes.md']) === '/home/dev/notes.md');
+  check('attach: a path containing whitespace is wrapped in double quotes',
+    A.buildPathInsert(['/home/dev/my notes.md']) === '"/home/dev/my notes.md"');
+  check('attach: multiple paths are space-joined, each quoted iff it has whitespace',
+    A.buildPathInsert(['/a/b.txt', '/c/d e.txt']) === '/a/b.txt "/c/d e.txt"');
+  check('attach: a CR or LF anywhere in a path is rejected', (() => {
+    for (const bad of ['/a/b\nc', '/a/b\rc']) {
+      try { A.buildPathInsert([bad]); return false; } catch (e) { /* expected */ }
+    }
+    return true;
+  })());
+
+  const root = process.platform === 'win32' ? 'C:\\ws' : '/ws';
+  const attachDir = A.DEFAULT_ATTACHMENTS_DIR;
+  const writes = {};
+  const mkdirs = [];
+  const fakeIo = {
+    mkdirSync: (p) => { mkdirs.push(p); },
+    writeFileSync: (p, b) => { writes[p] = b; },
+  };
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const out = A.writePastedImage(
+    { root, dir: attachDir, bytes: png, maxMB: 10, now: new Date('2026-08-29T12:34:56.789Z'), mime: 'image/png' },
+    fakeIo
+  );
+  check('attach: image is written strictly inside <root>/<attachmentsDir>',
+    out === path.join(path.resolve(root, attachDir), 'paste-2026-08-29T12-34-56-789Z.png') &&
+    writes[out] === png, out);
+  check('attach: the mkdir target is inside the workspace too',
+    mkdirs.length === 1 && !path.relative(path.resolve(root), mkdirs[0]).startsWith('..'));
+  check('attach: the generated filename carries no caller-supplied text',
+    /[/\\]paste-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.png$/.test(out));
+  check('attach: a payload over maxAttachmentMB is rejected', (() => {
+    try {
+      A.writePastedImage({ root, dir: attachDir, bytes: Buffer.alloc(2 * 1024 * 1024), maxMB: 1, now: 0 }, fakeIo);
+      return false;
+    } catch (e) { return /larger than the 1 MB/.test(e.message); }
+  })());
+  check('attach: no workspace folder -> rejected, nothing written', (() => {
+    try { A.writePastedImage({ root: null, bytes: png, now: 0 }, fakeIo); return false; }
+    catch (e) { return /folder/.test(e.message); }
+  })());
+  check('attach: a dir that climbs out of the workspace is refused', (() => {
+    try { A.resolveInsideWorkspace(root, '../evil', 'x.png'); return false; }
+    catch (e) { return /escapes the workspace/.test(e.message); }
+  })());
+
+  let cleared = null;
+  A.clearAttachmentsDir(root, attachDir, { rmSync: (p) => { cleared = p; } });
+  check('attach: clearAttachmentsDir targets exactly <root>/<attachmentsDir>',
+    cleared === path.resolve(root, attachDir));
+  cleared = null;
+  A.clearAttachmentsDir(root, '../..', { rmSync: (p) => { cleared = p; } });
+  check('attach: clearAttachmentsDir refuses to climb out of the workspace', cleared === null);
+  cleared = null;
+  A.clearAttachmentsDir(root, '', { rmSync: (p) => { cleared = p; } });
+  check('attach: clearAttachmentsDir with no dir is a no-op', cleared === null);
+}
+
+// --- 16. v1.0.0: manifest + extension wiring for clipboard/attach ----
+{
+  check('manifest: version is exactly 1.0.0', pkg.version === '1.0.0');
+  check('manifest: keywords include "claude code" and "terminal"',
+    Array.isArray(pkg.keywords) && pkg.keywords.includes('claude code') && pkg.keywords.includes('terminal'));
+  check('manifest: galleryBanner is set (dark, #1e1e2e)',
+    pkg.galleryBanner && pkg.galleryBanner.color === '#1e1e2e' && pkg.galleryBanner.theme === 'dark');
+  const cp2 = (((pkg.contributes || {}).configuration || {}).properties) || {};
+  for (const key of ['agentyard.terminalCopyPaste', 'agentyard.copyOnSelection',
+    'agentyard.attachmentsDir', 'agentyard.keepAttachments', 'agentyard.maxAttachmentMB']) {
+    check('manifest: config prop ' + key + ' is declared', !!cp2[key]);
+  }
+  check('manifest: terminalCopyPaste defaults to true', cp2['agentyard.terminalCopyPaste'].default === true);
+  check('manifest: copyOnSelection defaults to false', cp2['agentyard.copyOnSelection'].default === false);
+  check('manifest: attachmentsDir defaults to .agentyard/tmp',
+    cp2['agentyard.attachmentsDir'].default === '.agentyard/tmp');
+  check('manifest: keepAttachments defaults to false', cp2['agentyard.keepAttachments'].default === false);
+  check('manifest: maxAttachmentMB defaults to 10', cp2['agentyard.maxAttachmentMB'].default === 10);
+
+  const extSrc = fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8');
+  check('extension: uses the shared/attach.js helpers',
+    /require\(['"]\.\/shared\/attach(\.js)?['"]\)/.test(extSrc) && /attach\.writePastedImage\(/.test(extSrc));
+  check('extension: clipboard goes through vscode.env.clipboard, not a webview navigator',
+    /vscode\.env\.clipboard\.readText\(/.test(extSrc) && /vscode\.env\.clipboard\.writeText\(/.test(extSrc));
+  check('extension: picks files via showOpenDialog and inserts, never submits',
+    /showOpenDialog\(/.test(extSrc) && /event: 'insert'/.test(extSrc));
+  check('extension: never console.logs the attachment bytes or the prompt',
+    !/console\.\w+\([^)]*\bb64\b/.test(extSrc) && !/console\.\w+\([^)]*\bbytes\b/.test(extSrc) &&
+    !/console\.\w+\([^)]*\bprompt\b/.test(extSrc));
+  check('extension: clears the attachments dir when keepAttachments is false',
+    /keepAttachments/.test(extSrc) && /clearAttachmentsDir/.test(extSrc));
+  check('extension: passes platform + copy/paste config into the webview',
+    /platform: \$\{JSON\.stringify\(process\.platform\)\}/.test(extSrc) &&
+    /terminalCopyPaste:/.test(extSrc));
+
+  const termClipSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'termclip.js'), 'utf8');
+  check('termclip: no direct clipboard or network access in the webview module',
+    !/navigator\.clipboard/.test(termClipSrc) && !/fetch\(/.test(termClipSrc));
+  const termSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'term.js'), 'utf8');
+  check('term.js: wires attachCustomKeyEventHandler to termclip.keyHandler',
+    /attachCustomKeyEventHandler\(\s*\(e\)\s*=>\s*clip\.keyHandler\(e, clipIo\)\s*\)/.test(termSrc));
+}
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 process.exitCode = failures === 0 ? 0 : 1;

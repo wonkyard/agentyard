@@ -33,6 +33,22 @@ one-line notice — the rest of the extension is unaffected. **Agentyard: Open
 Claude Code Terminal** opens a full session in a normal VS Code terminal and is
 always available.
 
+**Platform support:** the Office view runs everywhere; the embedded terminal
+runs on win32-x64 / linux-x64 / linux-arm64, and elsewhere the Run view falls
+back to the headless feed.
+
+**Copy / paste & attachments.** In the terminal, `Ctrl/Cmd+C` copies the
+selection (with no selection it still interrupts), `Ctrl+Shift+C` always copies,
+and `Ctrl/Cmd+V` / `Ctrl+Shift+V` / `Shift+Insert` paste; right-click copies or
+pastes. The **📎 Attach** button (on both the terminal and the headless feed)
+opens the file picker and inserts the path(s) into the prompt without submitting
+— paths with spaces are quoted. Paste an image, or drag files onto the view, and
+Agentyard writes the image to `agentyard.attachmentsDir` (default
+`.agentyard/tmp`, inside the workspace) and inserts its path, since Claude Code
+reads images by path. `agentyard.keepAttachments` (default `false`) clears that
+folder on Run-view init and **New thread**; `agentyard.maxAttachmentMB` (default
+`10`) caps a single paste/drop.
+
 Settings: `agentyard.claudePath` (default `claude`), `agentyard.runView`
 (`terminal` | `headless`, default `terminal`), `agentyard.claudeExtraArgs`
 (appended verbatim, e.g. `["--model", "opus"]`), `agentyard.claudePermissionMode`
@@ -113,8 +129,8 @@ Settings (`agentyard.*`): `dbPath` (default `state/company.db`),
 ## Install the packaged build
 
 ```bash
-npx vsce package                       # -> agentyard-0.4.0.vsix
-code --install-extension agentyard-0.4.0.vsix
+npx vsce package                       # -> agentyard-1.0.0.vsix
+code --install-extension agentyard-1.0.0.vsix
 ```
 
 ## Sanity check
@@ -166,12 +182,14 @@ webview/
   js/render.js          scene layout + canvas drawing
   js/run.js             the headless Run view: feed rendering + send/cancel/new-thread
   js/term.js            the terminal Run view: xterm.js surface <-> pty wiring
+  js/termclip.js        pure copy/paste key handler + image-blob helper (tested)
   js/main.js            poll loop, render loop, click + info panel, view toggle
   vendor/               vendored sql.js + xterm.js (MIT, see *-LICENSE files)
 shared/claudeArgs.js    builds the claude argv — headless (`-p`) and interactive (pure, tested)
 shared/winWrap.js       resolves a Windows .cmd/.bat CLI shim to the real exe (no cmd.exe)
 shared/streamJson.js    parses the stream-json NDJSON into feed items (pure)
 shared/killTree.js      kills the run's / terminal's whole process tree
+shared/attach.js        builds the attachment path-insert string + safe image temp-write (pure, tested)
 ```
 
 ## License
