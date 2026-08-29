@@ -36,6 +36,30 @@ product-ops    -> runs on its own cadence, recommends
 daily-reporter -> runs when the company asks "what did you do", produces reports/daily/<date>.md
 ```
 
+## Releasing
+
+Releases are cut by pushing a version tag — no local PAT handling:
+
+```
+npm version patch          # bumps package.json, makes the commit + vX.Y.Z tag
+git push origin main --follow-tags
+```
+
+The tag push triggers `.github/workflows/release.yml`, which runs `npm ci`, guards that the
+tag matches `package.json` version, runs `npm run sanity`, packages the `.vsix` with the
+pinned `@vscode/vsce` devDependency, publishes to the marketplaces, and attaches the `.vsix`
+to a GitHub Release for the tag.
+
+Two repo secrets must be set (**Settings → Secrets and variables → Actions**):
+
+| Secret | Used for |
+|--------|----------|
+| `VSCE_PAT` | VS Code Marketplace publish (`vsce publish`) |
+| `OVSX_PAT` | Open VSX publish (`ovsx publish`) |
+
+If either secret is missing the matching publish step is skipped with a warning (a fork
+still gets a packaged `.vsix` on the Release); the run does not fail.
+
 ## Rules
 
 - No agent pushes or commits on its own. `release-check` must PASS first, and every push needs

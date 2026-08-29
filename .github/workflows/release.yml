@@ -1,0 +1,92 @@
+# Ship a release without touching a PAT locally:
+#
+#   npm version patch          # bumps package.json, makes the vX.Y.Z commit + tag
+#   git push origin main --follow-tags
+#
+# The tag push triggers this workflow, which packages the .vsix, publishes it to
+# every marketplace whose PAT secret is configured, and attaches the .vsix to a
+# GitHub Release for the tag. Required repo secrets: VSCE_PAT (VS Code
+# Marketplace), OVSX_PAT (Open VSX). A fork without those still gets a packaged
+# .vsix on the Release — the publish steps skip with a warning instead of failing.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write # softprops/action-gh-release uploads the .vsix asset to the Release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      # Lifted to job scope so the publish steps can test them in `if`/shell
+      # without threading `secrets` through every step.
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20' # no .nvmrc/engines.node in the repo; pin the current LTS
+          cache: npm
+
+      - run: npm ci
+
+      # Version guard: the tag (minus the leading "v") must equal package.json's
+      # version, so a mistagged push can never publish the wrong build.
+      - name: Verify tag matches package.json version
+        id: version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version="$(node -p "require('./package.json').version")"
+          echo "tag=$tag_version  package.json=$pkg_version"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version ${pkg_version}"
+            exit 1
+          fi
+          echo "version=$pkg_version" >> "$GITHUB_OUTPUT"
+
+      - run: npm run sanity
+
+      # `npm run package` -> `vsce package` from the pinned devDependency
+      # (npm ci put ./node_modules/.bin on PATH), never a floating `npx --yes` latest.
+      - name: Package extension
+        id: package
+        run: |
+          npm run package
+          echo "vsix=agentyard-${{ steps.version.outputs.version }}.vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to VS Code Marketplace
+        env:
+          VSIX: ${{ steps.package.outputs.vsix }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::warning::VSCE_PAT secret is not set — skipping VS Code Marketplace publish"
+            exit 0
+          fi
+          npx vsce publish --packagePath "$VSIX"
+
+      - name: Publish to Open VSX
+        env:
+          VSIX: ${{ steps.package.outputs.vsix }}
+        run: |
+          if [ -z "$OVSX_PAT" ]; then
+            echo "::warning::OVSX_PAT secret is not set — skipping Open VSX publish"
+            exit 0
+          fi
+          # A re-run of an already-published version exits non-zero; treat that as
+          # success so re-triggering the tag stays idempotent.
+          if ! npx ovsx publish "$VSIX" -p "$OVSX_PAT"; then
+            echo "::warning::ovsx publish failed — assuming this version is already published, continuing"
+          fi
+
+      - name: Create or update the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package.outputs.vsix }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true

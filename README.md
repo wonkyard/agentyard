@@ -140,9 +140,12 @@ Settings (`agentyard.*`): `dbPath` (default `state/company.db`),
 ## Install the packaged build
 
 ```bash
-npx vsce package                       # -> agentyard-1.0.0.vsix
-code --install-extension agentyard-1.0.0.vsix
+npm run package                        # -> agentyard-<version>.vsix
+code --install-extension agentyard-<version>.vsix
 ```
+
+Publishing is automated — push a `vX.Y.Z` tag and GitHub Actions packages,
+publishes, and cuts the Release. See **Releasing** in `CLAUDE.md`.
 
 ## Sanity check
 

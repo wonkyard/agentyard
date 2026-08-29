@@ -180,15 +180,17 @@
     "icon": "node scripts/make-icon.mjs",
     "demo-data": "node scripts/make-demo-data.mjs",
     "dev": "node scripts/dev-server.mjs",
-    "sanity": "node scripts/sanity.mjs"
+    "sanity": "node scripts/sanity.mjs",
+    "package": "vsce package"
   },
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "0.14.1"
   },
   "devDependencies": {
-    "@vscode/vsce": "^3.2.0",
+    "@vscode/vsce": "3.9.2",
     "@xterm/addon-fit": "0.10.0",
     "@xterm/xterm": "5.5.0",
+    "ovsx": "1.1.1",
     "sql.js": "1.10.3"
   }
 }
