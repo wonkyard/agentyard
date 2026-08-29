@@ -9,15 +9,19 @@ who is busy and what they are doing. No network, no API keys, no telemetry.
 
 Built by the Founder for their own use while running an agent-driven company.
 
-![screenshot](media/screenshots/agentyard-v0.2.png)
+![the office scene](media/screenshots/office.png)
 
-*(screenshot uses the bundled synthetic demo data, not a real company)*
+*(screenshots use the bundled synthetic demo data, not a real company)*
 
 ## Run view
 
 A header toggle switches between the office scene and a **Run** view — a real
 embedded terminal running an interactive Claude Code session in the workspace
-folder, using your existing CLI login (no API key). It behaves exactly like the
+folder, using your existing CLI login (no API key).
+
+![the run view](media/screenshots/run-view.png)
+
+It behaves exactly like the
 Claude Code terminal: permission prompts appear **in the panel** and you answer
 `y/n` there, follow-up messages continue the **same** session, plan mode works.
 **New thread** kills the session and starts fresh. Closing the panel or
@@ -77,6 +81,8 @@ a keybinding.)
   team shows as **working** with a `building…` sign, so the office tells you which
   product is being built right now. Falls back to the plain annex when there is
   no `company.db` or `local_path`.
+
+  ![an annex being built](media/screenshots/annex-building.png)
 - **Live status** — from `status_log` (latest row per `project_id` + `department`):
   - `working` → the agent sits at the desk, monitor on, a thought bubble showing
     the latest note.

@@ -12,6 +12,7 @@ const { needsCmdWrap, resolveLauncher } = require('./shared/winWrap.js');
 const { StreamJsonParser } = require('./shared/streamJson.js');
 const { killTree, spawnGroupOpts } = require('./shared/killTree.js');
 const attach = require('./shared/attach.js');
+const pkg = require('./package.json');
 
 // node-pty powers the embedded terminal in the Run view. It is a native module;
 // if its prebuilt binary can't load on this platform/ABI we fall back to the
@@ -859,7 +860,7 @@ function getHtml(webview, extUri) {
 <body class="panel">
   <div id="app">
     <header id="topbar">
-      <span class="brand">AGENTYARD<span class="ver">v1.0</span></span>
+      <span class="brand">AGENTYARD<span class="ver" id="brand-ver"></span></span>
       <span id="view-toggle">
         <button type="button" data-view="office" class="on">Office</button>
         <button type="button" data-view="run">Run</button>
@@ -895,7 +896,7 @@ function getHtml(webview, extUri) {
     </div>
   </div>
   <script nonce="${n}">
-    window.AY_CONFIG = { mode: 'vscode', pollSeconds: ${JSON.stringify(cfg.get('pollSeconds', 3))}, wasmUrl: ${JSON.stringify(wasmUrl)}, runView: ${JSON.stringify(runView)}, runViewRequested: ${JSON.stringify(runViewRequested)}, ptyAvailable: ${JSON.stringify(ptyAvailable)}, platform: ${JSON.stringify(process.platform)}, terminalCopyPaste: ${JSON.stringify(cfg.get('terminalCopyPaste', true))}, copyOnSelection: ${JSON.stringify(cfg.get('copyOnSelection', false))} };
+    window.AY_CONFIG = { mode: 'vscode', version: ${JSON.stringify(pkg.version)}, pollSeconds: ${JSON.stringify(cfg.get('pollSeconds', 3))}, wasmUrl: ${JSON.stringify(wasmUrl)}, runView: ${JSON.stringify(runView)}, runViewRequested: ${JSON.stringify(runViewRequested)}, ptyAvailable: ${JSON.stringify(ptyAvailable)}, platform: ${JSON.stringify(process.platform)}, terminalCopyPaste: ${JSON.stringify(cfg.get('terminalCopyPaste', true))}, copyOnSelection: ${JSON.stringify(cfg.get('copyOnSelection', false))} };
   </script>
   ${scripts}
 </body>

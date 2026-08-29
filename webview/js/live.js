@@ -122,7 +122,10 @@
         };
         agents.set(key, a);
       }
-      if (ev.cwd && !a.cwd) a.cwd = ev.cwd;
+      // Latest non-empty cwd wins: a subagent (e.g. a repo build runner) is
+      // spawned in one directory and then `cd`s into the repo it works on, and
+      // §7 attribution keys on where it is actually running tools.
+      if (ev.cwd) a.cwd = ev.cwd;
       if (ev.agent_type && a.kind === 'subagent') a.type = ev.agent_type;
       return a;
     }

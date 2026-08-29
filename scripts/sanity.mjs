@@ -101,6 +101,9 @@ const win = {
     querySelectorAll: () => [], addEventListener() {} },
 };
 win.window = win;
+// The host injects the real version + platform into AY_CONFIG (from package.json).
+const PKG = JSON.parse(fs.readFileSync(path.join(EXT_ROOT, 'package.json'), 'utf8'));
+win.AY_CONFIG = { version: PKG.version, platform: 'linux' };
 for (const f of ['js/palette.js', 'js/sprites.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/termclip.js', 'js/run.js', 'js/term.js']) {
   const code = fs.readFileSync(path.join(EXT_ROOT, 'webview', f), 'utf8');
   new Function('window', 'self', 'globalThis', 'module', 'document', code)(win, win, win, undefined, win.document);
@@ -125,11 +128,12 @@ check('blocked status resolves', office.counts.blocked >= 1, JSON.stringify(offi
 
 // --- 4. one render pass against a recording stub -------------------
 const calls = { fillRect: 0, fillText: 0, strokeRect: 0 };
+const drawnText = [];
 const ctx = new Proxy(
   {
     fillRect: () => calls.fillRect++,
     strokeRect: () => calls.strokeRect++,
-    fillText: () => calls.fillText++,
+    fillText: (s) => { calls.fillText++; drawnText.push(String(s)); },
     measureText: (s) => ({ width: String(s).length * 6 }),
     beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {}, save() {}, restore() {},
   },
@@ -144,6 +148,9 @@ try {
 }
 if (out) {
   check('render drew tiles + text', calls.fillRect > 200 && calls.fillText > 20);
+  check('render: scene header draws the real version from AY_CONFIG (no hardcoded v0.x)',
+    drawnText.includes('v' + PKG.version) && !drawnText.some((s) => /^v0\.\d/.test(s)),
+    JSON.stringify(drawnText.filter((s) => /^v\d/.test(s))));
   check(
     'hit-rects = one per agent',
     out.hits.length === departments.length + annexCount * 5,
@@ -932,6 +939,58 @@ check('retainContextWhenHidden set',
   } catch (e) {
     check('§7: render() draws a building annex without throwing', false, e.message);
   }
+}
+
+// --- 18. v1.0.1: version wiring + the demo sample shows a repo being built ---
+{
+  const renderSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'render.js'), 'utf8');
+  const idxHtml = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'index.html'), 'utf8');
+  const mainSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'main.js'), 'utf8');
+  const extSrc = fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8');
+  const devSrc = fs.readFileSync(path.join(EXT_ROOT, 'scripts', 'dev-server.mjs'), 'utf8');
+
+  check('version: no hardcoded v0.x / v1.x literal left in render.js',
+    !/['"]v\d+\.\d/.test(renderSrc));
+  check('version: render.js draws the version from AY_CONFIG',
+    /AY_CONFIG/.test(renderSrc) && /\.version/.test(renderSrc) && /fillText\('v' \+/.test(renderSrc));
+  check('version: index.html topbar .ver is empty markup, filled from AY_CONFIG',
+    /class="ver"[^>]*>\s*<\/span>/.test(idxHtml) && !/class="ver"[^>]*>v\d/.test(idxHtml));
+  check('version: index.html carries the __AY_VERSION__ token for the dev server',
+    idxHtml.includes('__AY_VERSION__'));
+  check('version: main.js sets #brand-ver from AY_CONFIG.version',
+    /brand-ver/.test(mainSrc) && /cfg\.version/.test(mainSrc));
+  check('view: main.js honours location.hash (#run / #office) on load and hashchange',
+    /location\.hash/.test(mainSrc) && /'hashchange'/.test(mainSrc));
+  check('version: extension.js getHtml puts package.json version into AY_CONFIG',
+    /require\(['"]\.\/package\.json['"]\)/.test(extSrc) &&
+    /version: \$\{JSON\.stringify\(pkg\.version\)\}/.test(extSrc));
+  check('version: dev-server injects package.json version for __AY_VERSION__',
+    /require\(['"]\.\.\/package\.json['"]\)\.version/.test(devSrc) &&
+    /__AY_VERSION__/.test(devSrc));
+
+  // The bundled sample event stream drives npm run dev; it must render the
+  // cloud-garden annex (DEMO-0002's local_path) as building.
+  const sampleEvents = fs.readFileSync(path.join(DD, 'sample-events.jsonl'), 'utf8')
+    .split('\n').map((l) => l.trim()).filter(Boolean).map((l) => JSON.parse(l));
+  check('demo sample: a repo-team-runner subagent runs inside a demo local_path',
+    sampleEvents.some((e) => e.agent_type === 'repo-team-runner' &&
+      e.cwd === '/demo/workspace/cloud-garden'));
+  check('demo sample: paths are synthetic (no real user dirs)',
+    sampleEvents.every((e) => !e.cwd || !/[A-Za-z]:\\Users\\/.test(e.cwd)));
+  let maxTs = 0;
+  for (const e of sampleEvents) { const m = Date.parse(String(e.ts || '')); if (!isNaN(m)) maxTs = Math.max(maxTs, m); }
+  const demoOffice = win.AY.model.build(
+    { departments, teamRoles, dataMode: 'demo', liveEvents: sampleEvents, hooksInstalled: true,
+      nowMs: maxTs + 3000, idleSeconds: 30, platform: 'linux' },
+    { projects, statuses }
+  );
+  const cg = demoOffice.annexes.find((a) => a.projectId === 'DEMO-0002');
+  check('demo sample: the cloud-garden annex renders as building',
+    cg && cg.building === true && cg.slug === 'cloud-garden' &&
+    cg.team.some((m) => m.status === 'working'),
+    cg ? JSON.stringify({ building: cg.building, doing: cg.buildDoing }) : 'no DEMO-0002 annex');
+  check('demo sample: the runner is not also a loose live-sub room',
+    !demoOffice.liveRooms.some((r) => r.title === 'repo-team-runner'));
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
