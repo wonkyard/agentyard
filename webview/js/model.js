@@ -38,14 +38,26 @@
 
   // ---- §7: attribute an in-repo build runner to its project's annex -----
   // The Chief of Staff dispatches a build into a split repo; an in-process
-  // runner acts as that repo's project-lead -> project-eng -> release-check
-  // inside `projects.local_path`. When we can see that (a live subagent whose
-  // cwd resolves inside a project's local_path, or the repo-build runner type),
-  // that project's annex team is the one working right now — not idle.
+  // runner acts as that repo's project-lead -> project-eng -> release-check.
+  // The runner echoes "[agentyard] build <project_id-or-slug>" once at the
+  // start (live.js -> a.buildTarget); that is the primary signal, because the
+  // in-process runner's hook cwd never leaves the company root. Falling back:
+  // a live subagent whose cwd resolves inside a project's local_path, or a
+  // lone repo-runner-typed subagent. Either way that project's annex team is
+  // the one working right now — not idle.
   const REPO_RUNNER_TYPES = new Set(['repo-team-runner', 'repo-build-runner']);
 
   function normPath(s) {
     return String(s || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  }
+
+  function pathBasename(s) {
+    const n = normPath(s);
+    return n ? n.split('/').pop() : null;
+  }
+
+  function eqCI(x, y) {
+    return !!x && !!y && String(x).toLowerCase() === String(y).toLowerCase();
   }
 
   // Is `child` the same as, or nested inside, `parent`? Slash-normalised, and
@@ -71,23 +83,45 @@
     return r === tail || r.endsWith('-' + tail) || r.indexOf(tail) !== -1;
   }
 
-  // Map each project that has a local_path to the freshest live runner agent
-  // building it. Empty when there is no company.db / no local_path / no match —
-  // callers then keep today's behaviour (loose runner sprite).
+  // Map each split-repo project to the freshest live runner agent building it.
+  // Empty when there is no company.db / no runner / no match — callers then keep
+  // today's behaviour (loose runner sprite).
   function attributeRunners(liveAgents, projects, platform) {
-    const withPath = projects.filter((p) => p.repo_url && p.local_path);
+    const candidates = projects.filter((p) => p.repo_url);
     const hits = new Map();
-    if (!withPath.length) return hits;
-    for (const a of liveAgents) {
-      if (a.kind !== 'subagent' || a.leaving) continue;
-      const proj =
-        withPath.find((p) => pathInside(a.cwd, p.local_path, platform)) ||
-        (REPO_RUNNER_TYPES.has(a.type) && withPath.length === 1 ? withPath[0] : null);
-      if (!proj) continue;
-      const cur = hits.get(proj.project_id);
-      if (!cur || String(a.ts || '') > String(cur.agent.ts || '')) {
-        hits.set(proj.project_id, { agent: a, phase: a.phase || null });
+    if (!candidates.length) return hits;
+    const runners = (liveAgents || []).filter((a) => a.kind === 'subagent' && !a.leaving);
+    if (!runners.length) return hits;
+
+    const fresher = (a, b) => !b || String(a.ts || '') > String(b.ts || '');
+
+    for (const p of candidates) {
+      const slug = slugFromRepo(p.repo_url);
+      const base = p.local_path ? pathBasename(p.local_path) : null;
+      let best = null;
+
+      for (const a of runners) {
+        let match = false;
+        if (a.buildTarget) {
+          // 1. explicit marker: exact project id, or CI slug / local_path basename
+          match = a.buildTarget === p.project_id || eqCI(a.buildTarget, slug) || eqCI(a.buildTarget, base);
+        } else if (p.local_path && pathInside(a.cwd, p.local_path, platform)) {
+          // 2. no marker: a subagent running tools inside the repo's local_path
+          match = true;
+        }
+        if (match && fresher(a, best)) best = a;
       }
+
+      // 3. no marker / cwd match anywhere: a lone repo-runner-typed subagent that
+      //    did not name a different target, when there is exactly one split-repo
+      //    project to attribute it to.
+      if (!best && candidates.length === 1) {
+        for (const a of runners) {
+          if (!a.buildTarget && REPO_RUNNER_TYPES.has(a.type) && fresher(a, best)) best = a;
+        }
+      }
+
+      if (best) hits.set(p.project_id, { agent: best, phase: best.phase || null });
     }
     return hits;
   }

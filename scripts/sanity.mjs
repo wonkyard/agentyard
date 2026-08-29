@@ -972,9 +972,11 @@ check('retainContextWhenHidden set',
   // cloud-garden annex (DEMO-0002's local_path) as building.
   const sampleEvents = fs.readFileSync(path.join(DD, 'sample-events.jsonl'), 'utf8')
     .split('\n').map((l) => l.trim()).filter(Boolean).map((l) => JSON.parse(l));
-  check('demo sample: a repo-team-runner subagent runs inside a demo local_path',
+  check('demo sample: the repo-team-runner echoes an [agentyard] build marker, cwd at company root',
     sampleEvents.some((e) => e.agent_type === 'repo-team-runner' &&
-      e.cwd === '/demo/workspace/cloud-garden'));
+      /\[agentyard\] build DEMO-0002/.test(String(e.tool_input_summary || ''))) &&
+    sampleEvents.filter((e) => e.agent_type === 'repo-team-runner')
+      .every((e) => e.cwd === '/demo/workspace/company'));
   check('demo sample: paths are synthetic (no real user dirs)',
     sampleEvents.every((e) => !e.cwd || !/[A-Za-z]:\\Users\\/.test(e.cwd)));
   let maxTs = 0;
@@ -1083,6 +1085,100 @@ check('retainContextWhenHidden set',
     K.keyHandler(mk({ type: 'keyup', ctrlKey: true, shiftKey: true }), io()) === true && pastedWith === undefined);
   check('newline: disabled config -> Ctrl+Shift+Enter passes through',
     K.keyHandler(mk({ ctrlKey: true, shiftKey: true }), io({ enabled: false })) === true);
+}
+
+// --- 21. v1.0.1 round 2: [agentyard] build <id> marker lights the annex ---
+{
+  const L = win.AY.live;
+  const M = win.AY.model;
+
+  check('buildTarget: "[agentyard] build DEMO-0002" -> "DEMO-0002" (case preserved)',
+    L.buildTargetFromText('echo "[agentyard] build DEMO-0002"') === 'DEMO-0002');
+  check('buildTarget: "[agentyard] building foo" -> "foo"',
+    L.buildTargetFromText('[agentyard] building foo') === 'foo');
+  check('buildTarget: "[agentyard] target agentyard" -> "agentyard"',
+    L.buildTargetFromText('[agentyard] target agentyard') === 'agentyard');
+  check('buildTarget: a role marker -> null',
+    L.buildTargetFromText('[agentyard] project-eng') === null &&
+    L.buildTargetFromText('[agentyard] project-lead -> project-eng') === null);
+  check('buildTarget: no tag -> null', L.buildTargetFromText('just running npm test') === null);
+  check('phaseFromText: a build marker is not a phase (not "demo-0002")',
+    L.phaseFromText('[agentyard] build DEMO-0002') === null);
+  check('phaseFromText: a real handoff marker still resolves',
+    L.phaseFromText('echo [agentyard] project-lead -> project-eng') === 'project-eng');
+
+  const B = Date.parse('2026-08-29T12:00:00Z');
+  const iso = (s) => new Date(B + s * 1000).toISOString();
+  const now = B + 6000;
+  const runnerEv = (target, extra) => [
+    { ts: iso(0), hook_event_name: 'SessionStart', session_id: 'co', cwd: '/demo/ws/company' },
+    { ts: iso(1), hook_event_name: 'SubagentStart', session_id: 'co', agent_id: 'r', agent_type: 'repo-team-runner' },
+    { ts: iso(2), hook_event_name: 'PreToolUse', session_id: 'co', agent_id: 'r', agent_type: 'repo-team-runner',
+      cwd: '/demo/ws/company', tool_name: 'Bash', tool_input_summary: 'echo "[agentyard] build ' + target + '"' },
+  ].concat(extra || []);
+
+  const lr = L.resolve(runnerEv('DEMO-0002'), { nowMs: now, idleSeconds: 30 });
+  check('live: the runner agent carries buildTarget from the marker',
+    lr.agents.some((a) => a.type === 'repo-team-runner' && a.buildTarget === 'DEMO-0002'));
+
+  const projCG = { project_id: 'DEMO-0002', idea_summary: 'cg', current_stage: 'launch-ready',
+    updated_at: iso(0), repo_url: 'https://example.com/demo/cloud-garden', local_path: '/demo/ws/cloud-garden' };
+  const projRS = { project_id: 'DEMO-0003', idea_summary: 'rs', current_stage: 'shipped',
+    updated_at: iso(0), repo_url: 'https://example.com/demo/retro-synth', local_path: '/demo/ws/retro-synth' };
+
+  const mk = (liveEvents, prjs, platform) => M.build(
+    { departments, teamRoles, dataMode: 'workspace', liveEvents, hooksInstalled: true,
+      nowMs: now, idleSeconds: 30, platform: platform || 'linux' },
+    { projects: prjs, statuses: [] }
+  );
+
+  const o1 = mk(runnerEv('DEMO-0002'), [projCG, projRS]);
+  const cg1 = o1.annexes.find((a) => a.projectId === 'DEMO-0002');
+  const rs1 = o1.annexes.find((a) => a.projectId === 'DEMO-0003');
+  check('marker: the id-matched annex is building, seats working (cwd at company root)',
+    cg1 && cg1.building === true && cg1.team.length > 0 && cg1.team.every((m) => m.status === 'working'),
+    cg1 ? JSON.stringify(cg1.team.map((m) => m.status)) : 'no annex');
+  check('marker: the other split repo is left idle',
+    rs1 && !rs1.building && rs1.team.every((m) => m.status === 'idle'));
+  check('marker: the attributed runner is not also a loose live-sub room',
+    !o1.liveRooms.some((r) => r.title === 'repo-team-runner'));
+
+  const o2 = mk(runnerEv('cloud-garden'), [{ ...projCG, local_path: null }, { ...projRS, local_path: null }]);
+  check('marker: repo-slug match works with no local_path',
+    o2.annexes.find((a) => a.projectId === 'DEMO-0002').building === true);
+
+  const o2b = mk(runnerEv('retro-synth'), [{ ...projCG, local_path: null }, projRS]);
+  check('marker: local_path basename match',
+    o2b.annexes.find((a) => a.projectId === 'DEMO-0003').building === true);
+
+  const noMarker = [
+    { ts: iso(1), hook_event_name: 'SubagentStart', session_id: 'co', agent_id: 'r', agent_type: 'repo-team-runner' },
+    { ts: iso(2), hook_event_name: 'PreToolUse', session_id: 'co', agent_id: 'r', agent_type: 'repo-team-runner',
+      cwd: '/demo/ws/company', tool_name: 'Bash', tool_input_summary: 'npm test' },
+  ];
+  const o3 = mk(noMarker, [projCG, projRS]);
+  check('degrade: no marker + no cwd match + >1 project -> annexes idle, runner is a loose room',
+    o3.annexes.every((a) => !a.building) &&
+    o3.liveRooms.some((r) => r.title === 'repo-team-runner'));
+
+  const o4 = mk(runnerEv('DEMO-0002'), []);
+  check('degrade: no projects -> no throw, runner still shown',
+    o4.annexes.length === 0 && o4.liveRooms.some((r) => r.title === 'repo-team-runner'));
+
+  const withPhase = runnerEv('DEMO-0002', [
+    { ts: iso(3), hook_event_name: 'PreToolUse', session_id: 'co', agent_id: 'r', agent_type: 'repo-team-runner',
+      cwd: '/demo/ws/company', tool_name: 'Bash', tool_input_summary: 'echo "[agentyard] project-lead -> project-eng"' },
+    { ts: iso(4), hook_event_name: 'PreToolUse', session_id: 'co', agent_id: 'r', agent_type: 'repo-team-runner',
+      cwd: '/demo/ws/company', tool_name: 'Edit', tool_input_summary: 'src/box.ts' },
+  ]);
+  const o5 = mk(withPhase, [projCG]);
+  const cg5 = o5.annexes.find((a) => a.projectId === 'DEMO-0002');
+  const engSeat = cg5.team.find((m) => /eng/.test(m.name));
+  const others5 = cg5.team.filter((m) => !/eng/.test(m.name));
+  check('marker + phase: build marker attributes, phase marker lights just the eng seat',
+    cg5.building === true && cg5.buildPhase === 'project-eng' &&
+    engSeat && engSeat.status === 'working' && others5.every((m) => m.status === 'idle'),
+    JSON.stringify(cg5.team.map((m) => m.name + ':' + m.status)));
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

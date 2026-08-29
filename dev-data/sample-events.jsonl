@@ -35,6 +35,6 @@
 {"ts":"2026-08-28T09:00:26.000Z","hook_event_name":"SessionStart","session_id":"sess-yard","cwd":"/demo/workspace/company"}
 {"ts":"2026-08-28T09:00:26.500Z","hook_event_name":"UserPromptSubmit","session_id":"sess-yard","cwd":"/demo/workspace/company"}
 {"ts":"2026-08-28T09:00:27.000Z","hook_event_name":"SubagentStart","session_id":"sess-yard","cwd":"/demo/workspace/company","agent_id":"rtr-1","agent_type":"repo-team-runner"}
-{"ts":"2026-08-28T09:00:28.000Z","hook_event_name":"PreToolUse","session_id":"sess-yard","cwd":"/demo/workspace/cloud-garden","agent_id":"rtr-1","agent_type":"repo-team-runner","tool_name":"Read","tool_input_summary":"reports/backlog.md"}
-{"ts":"2026-08-28T09:00:29.500Z","hook_event_name":"PreToolUse","session_id":"sess-yard","cwd":"/demo/workspace/cloud-garden","agent_id":"rtr-1","agent_type":"repo-team-runner","tool_name":"Edit","tool_input_summary":"src/subscription/box.ts"}
-{"ts":"2026-08-28T09:00:31.000Z","hook_event_name":"PreToolUse","session_id":"sess-yard","cwd":"/demo/workspace/cloud-garden","agent_id":"rtr-1","agent_type":"repo-team-runner","tool_name":"Bash","tool_input_summary":"npm run sanity"}
+{"ts":"2026-08-28T09:00:28.000Z","hook_event_name":"PreToolUse","session_id":"sess-yard","cwd":"/demo/workspace/company","agent_id":"rtr-1","agent_type":"repo-team-runner","tool_name":"Bash","tool_input_summary":"echo \"[agentyard] build DEMO-0002\""}
+{"ts":"2026-08-28T09:00:29.500Z","hook_event_name":"PreToolUse","session_id":"sess-yard","cwd":"/demo/workspace/company","agent_id":"rtr-1","agent_type":"repo-team-runner","tool_name":"Bash","tool_input_summary":"echo \"[agentyard] project-lead -> project-eng\""}
+{"ts":"2026-08-28T09:00:31.000Z","hook_event_name":"PreToolUse","session_id":"sess-yard","cwd":"/demo/workspace/company","agent_id":"rtr-1","agent_type":"repo-team-runner","tool_name":"Bash","tool_input_summary":"npm run sanity"}
