@@ -18,7 +18,13 @@
       // The run view needs a real child process, so it is VS Code only. The dev
       // server can still hand back a canned sample feed for layout work.
       runSupported: false,
+      termSupported: false,
       onRun() {},
+      onTerm() {},
+      termAttach() {},
+      termInput() {},
+      termResize() {},
+      termNew() {},
       async runSample() {
         try {
           const res = await fetch('api/run-sample', { cache: 'no-store' });
@@ -61,11 +67,18 @@
     let latest = null;
     let waiters = [];
     const runListeners = [];
+    const termListeners = [];
 
     root.addEventListener('message', (ev) => {
       const msg = ev.data || {};
       if (msg.type === 'run') {
         runListeners.forEach((fn) => {
+          try { fn(msg); } catch (e) { /* ignore */ }
+        });
+        return;
+      }
+      if (msg.type === 'term') {
+        termListeners.forEach((fn) => {
           try { fn(msg); } catch (e) { /* ignore */ }
         });
         return;
@@ -93,11 +106,27 @@
       mode: 'vscode',
       wasmUrl: cfg.wasmUrl || 'vendor/sql-wasm.wasm',
       runSupported: true,
+      termSupported: true,
       runCommand(command) {
         vscode.postMessage({ type: 'command', command });
       },
       onRun(fn) {
         if (typeof fn === 'function') runListeners.push(fn);
+      },
+      onTerm(fn) {
+        if (typeof fn === 'function') termListeners.push(fn);
+      },
+      termAttach(cols, rows) {
+        vscode.postMessage({ type: 'term', event: 'attach', cols, rows });
+      },
+      termInput(data) {
+        vscode.postMessage({ type: 'term', event: 'input', data: String(data) });
+      },
+      termResize(cols, rows) {
+        vscode.postMessage({ type: 'term', event: 'resize', cols, rows });
+      },
+      termNew() {
+        vscode.postMessage({ type: 'term', event: 'new' });
       },
       runStatus() {
         vscode.postMessage({ type: 'run', action: 'status' });

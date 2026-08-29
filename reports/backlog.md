@@ -1,5 +1,60 @@
 # Backlog
 
+## 2026-08-29 — v0.5: replace the Run feed with a real embedded terminal
+
+Why: The Founder wants the Run view to behave exactly like the Claude Code
+terminal — interactive permission prompts answered in the panel, one live
+session with follow-ups and plan mode — not a headless `claude -p` one-shot that
+denies every non-pre-allowed tool. Company spec:
+`../company/reports/TOOL-20260828-1008/v0.5-terminal.md` (architecture settled
+there — do not re-litigate: xterm.js in the webview + node-pty in the extension
+host, spawning the user's own interactive `claude`).
+
+Scope (exactly the spec's items):
+
+1. **Embedded terminal.** Vendor xterm.js + addon-fit into `webview/vendor/` the
+   same way `sql-wasm.js` is (pinned versions in `scripts/vendor.mjs`, LICENSE
+   checked in, no CDN, CSP-safe nonce/`<link>`). Run view becomes an xterm
+   surface wired to a `node-pty` in the extension host over the existing
+   `postMessage` channel (`{type:'term', event:'input'|'resize'}` in,
+   `{type:'term', event:'data'|'exit'}` out). New `TerminalRun` class spawns the
+   resolved real `claude` exe (interactive, NOT `-p`, no `--output-format`)
+   with `--permission-mode <mode>` when not `default` and `claudeExtraArgs`
+   verbatim, cwd = first workspace folder. Keep the v0.4 no-cmd.exe guarantee
+   (`shared/winWrap.js` shim resolution; refuse if a Windows shim can't be
+   resolved). One pty per panel, kept in the extension host so a webview reload
+   re-attaches; `killTree` on "New thread", panel dispose, and deactivate.
+2. **node-pty**: use a prebuilt-multiarch build so a published `.vsix` works on
+   win32-x64 / darwin-x64 / darwin-arm64 / linux-x64 without a compiler. Document
+   the Electron-ABI rebuild step in `CLAUDE.md` for future engine bumps.
+3. **Config**: add `agentyard.runView` (`terminal` | `headless`, default
+   `terminal`); drop the "headless can't answer prompts" note from
+   `claudeExtraArgs`; keep `claudePermissionMode` (now the real flag).
+4. **Graceful degradation**: `require(node-pty)` in try/catch — on failure the
+   Run view falls back to `headless` automatically with a one-line notice, the
+   Office view is untouched, the extension still activates.
+5. **Fallback command** `agentyard.openClaudeTerminal` — "Agentyard: Open Claude
+   Code Terminal" — `vscode.window.createTerminal` + `sendText(resolvedClaude)`,
+   same path resolution, always available.
+6. **Markdown (spec §2)**: check whether any assistant text is still rendered as
+   HTML after §1; if not, close with a note (no unused renderer).
+7. **Packaging**: `.vscodeignore` ships the native module + prebuilt binaries,
+   nothing dev-only; verify with `vsce ls`. Bump to `0.5.0`, update
+   `CHANGELOG.md` + `README.md`. `npm run sanity` stays green with new checks.
+
+Out of scope: Office view / pixel scene / live hook mode / DB reader / zombie
+horizon (untouched); Marketplace publish; syntax highlighting; multiple
+concurrent terminals; terminal theme UI.
+
+Done when: in the Extension Dev Host the Run view is a real terminal running an
+interactive `claude` (permission prompt answerable in-panel, follow-ups continue
+the same session, `claudePermissionMode: "plan"` starts in plan mode); no
+cmd.exe (sanity green + new checks); no orphan `claude` after panel close /
+window reload; node-pty missing -> headless fallback + notice, Office view fine;
+`vsce ls` reviewed; `agentyard-0.5.0.vsix` builds; repo `release-check` = PASS.
+
+Priority: now
+
 ## 2026-08-28 — v0.4 Release Gate FAIL round 1: close the two Criticals + two Mediums
 
 Why: The company Release Gate failed v0.4 on branch `v0.4-run` (`03ed6d3`). Two

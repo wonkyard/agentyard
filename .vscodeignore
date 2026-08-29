@@ -14,3 +14,19 @@ media/screenshots/*.psd
 .vscodeignore
 .eslintrc*
 CLAUDE.md
+
+# Ship node-pty — the embedded terminal's native module. `node_modules/**` above
+# excludes everything; the negations below re-include ONLY this one package's
+# runtime bits. vsce force-includes anything matching a `!` pattern regardless
+# of later rules, so each negation is scoped tightly — no `.pdb` debug symbols
+# (~28 MB), no TS sources, no install scripts, no third_party/ (its only job is
+# to populate build/Release/conpty during install, which is already committed).
+!node_modules/@homebridge/node-pty-prebuilt-multiarch/package.json
+!node_modules/@homebridge/node-pty-prebuilt-multiarch/LICENSE
+!node_modules/@homebridge/node-pty-prebuilt-multiarch/lib/**/*.js
+!node_modules/@homebridge/node-pty-prebuilt-multiarch/typings/**
+!node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release/*.node
+!node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release/*.dll
+!node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release/*.exe
+!node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release/conpty/**
+!node_modules/@homebridge/node-pty-prebuilt-multiarch/prebuilds/**

@@ -15,21 +15,31 @@ Built by the Founder for their own use while running an agent-driven company.
 
 ## Run view
 
-A header toggle switches between the office scene and a **Run** view — an input
-box and a scrollable feed. Send a prompt and Agentyard spawns the Claude Code
-CLI (`claude -p … --output-format stream-json --verbose`) in the workspace
-folder, using your existing CLI login (no API key), and streams the run back as
-a feed: your prompt, assistant text, tool calls (`→ Bash: npm test`), and the
-result. One run at a time; **Cancel** kills the process tree, **New thread**
-starts fresh (otherwise each message continues the thread via `--resume`).
+A header toggle switches between the office scene and a **Run** view — a real
+embedded terminal running an interactive Claude Code session in the workspace
+folder, using your existing CLI login (no API key). It behaves exactly like the
+Claude Code terminal: permission prompts appear **in the panel** and you answer
+`y/n` there, follow-up messages continue the **same** session, plan mode works.
+**New thread** kills the session and starts fresh. Closing the panel or
+reloading the window leaves no orphan `claude` process.
 
-![run view](media/screenshots/agentyard-v0.4-run.png)
+The terminal is [xterm.js](https://xtermjs.org) in the webview wired to a
+[node-pty](https://github.com/homebridge/node-pty-prebuilt-multiarch) pseudo-
+terminal in the extension host. node-pty is a native component; it ships with
+prebuilt binaries for **win32-x64, linux-x64, linux-arm64**. On a platform with
+no prebuilt binary the Run view falls back automatically to the older
+non-interactive feed (`claude -p … --output-format stream-json`) and shows a
+one-line notice — the rest of the extension is unaffected. **Agentyard: Open
+Claude Code Terminal** opens a full session in a normal VS Code terminal and is
+always available.
 
-Settings: `agentyard.claudePath` (default `claude`), `agentyard.claudeExtraArgs`
-(e.g. `["--allowedTools", "Read Edit Bash(npm test)"]`),
-`agentyard.claudePermissionMode` (default `default`). Headless runs can't answer
-permission prompts, so pre-allow the tools you want. Nothing about the run is
-written to disk by Agentyard.
+Settings: `agentyard.claudePath` (default `claude`), `agentyard.runView`
+(`terminal` | `headless`, default `terminal`), `agentyard.claudeExtraArgs`
+(appended verbatim, e.g. `["--model", "opus"]`), `agentyard.claudePermissionMode`
+(default `default`; `plan` starts the session in plan mode). On Windows the CLI
+is resolved to a real executable and spawned with no shell — `cmd.exe` is never
+invoked (see *How it's built*). Nothing about the session is written to disk by
+Agentyard.
 
 ## The panel tab
 
@@ -124,13 +134,18 @@ no real data.
 - **Rendering**: HTML5 `<canvas>`, vanilla JS, `image-rendering: pixelated`, one
   fixed palette in `webview/js/palette.js`, one tile size, procedurally-drawn
   sprites (no art assets).
-- **SQLite**: [sql.js](https://github.com/sql-js/sql.js) (MIT) WASM build,
-  **vendored** into `webview/vendor/` — never fetched from a CDN at runtime.
-  Re-copy it with `npm run vendor` after changing the `sql.js` version.
+- **SQLite** and **the terminal**: [sql.js](https://github.com/sql-js/sql.js)
+  (MIT) and [xterm.js](https://xtermjs.org) + `addon-fit` (MIT), **vendored**
+  into `webview/vendor/` — never fetched from a CDN at runtime. Re-copy them with
+  `npm run vendor` after bumping a version in `package.json`.
+- **The pseudo-terminal**: `@homebridge/node-pty-prebuilt-multiarch` (MIT), the
+  only native module. It ships prebuilt binaries; the Run view degrades to the
+  headless feed on any platform where the binary can't load. The Electron-ABI
+  rebuild step for future VS Code engine bumps is documented in `CLAUDE.md`.
 - **Portability**: the same `webview/` runs in a plain browser and in the VS Code
   panel. All VS Code APIs sit behind `webview/js/adapter.js`; the browser build
-  talks to `scripts/dev-server.mjs` over HTTP instead.
-- No native modules, no build step, cross-platform.
+  talks to `scripts/dev-server.mjs` over HTTP instead (which previews the
+  headless feed, since the terminal needs the extension host).
 
 ```
 extension.js            VS Code activation + WebviewViewProvider + file watchers
@@ -149,13 +164,14 @@ webview/
   js/adapter.js         browser <-> VS Code data adapter
   js/model.js           merges agents + db rows into the office model
   js/render.js          scene layout + canvas drawing
-  js/run.js             the Run view: feed rendering + send/cancel/new-thread
+  js/run.js             the headless Run view: feed rendering + send/cancel/new-thread
+  js/term.js            the terminal Run view: xterm.js surface <-> pty wiring
   js/main.js            poll loop, render loop, click + info panel, view toggle
-  vendor/               vendored sql.js (MIT, see sql.js-LICENSE)
-shared/claudeArgs.js    builds the `claude -p` argv (pure, tested)
+  vendor/               vendored sql.js + xterm.js (MIT, see *-LICENSE files)
+shared/claudeArgs.js    builds the claude argv — headless (`-p`) and interactive (pure, tested)
 shared/winWrap.js       resolves a Windows .cmd/.bat CLI shim to the real exe (no cmd.exe)
 shared/streamJson.js    parses the stream-json NDJSON into feed items (pure)
-shared/killTree.js      Cancel: kill the run's whole process tree
+shared/killTree.js      kills the run's / terminal's whole process tree
 ```
 
 ## License

@@ -2,6 +2,34 @@
 
 All notable changes to Agentyard are recorded here.
 
+## 0.5.0
+
+- **The Run view is now a real terminal.** Instead of a rendered feed of a
+  headless `claude -p` one-shot, the Run view is an embedded terminal
+  ([xterm.js](https://xtermjs.org) in the webview, a
+  [node-pty](https://github.com/homebridge/node-pty-prebuilt-multiarch)
+  pseudo-terminal in the extension host) running an **interactive** Claude Code
+  session in the workspace folder. Permission prompts appear in the panel and
+  you answer them there; follow-up messages continue the same session; plan mode
+  works. It uses your existing CLI login — no API key, no metered billing.
+- **`agentyard.claudePermissionMode`** now maps to the real `--permission-mode`
+  flag — `plan` starts the session in plan mode. **`agentyard.claudeExtraArgs`**
+  is appended verbatim to the interactive launch.
+- **New setting `agentyard.runView`** (`terminal` | `headless`, default
+  `terminal`). `headless` keeps the 0.4.1 non-interactive feed.
+- **Graceful fallback.** node-pty is a native component shipped with prebuilt
+  binaries for win32-x64 / linux-x64 / linux-arm64. On any platform where it
+  can't load, the Run view falls back to the headless feed automatically with a
+  one-line notice, and the Office view is unaffected — the extension still
+  activates.
+- **New command `Agentyard: Open Claude Code Terminal`** — opens a full
+  interactive session in a normal VS Code terminal, using the same
+  `agentyard.claudePath` resolution. Always available.
+- **Safety unchanged.** The v0.4 no-`cmd.exe` guarantee holds: the CLI is always
+  spawned as an argv array with no shell, and a Windows `.cmd`/`.bat` launcher is
+  resolved to the real executable it forwards to (or refused). Closing the panel
+  or reloading the window kills the pty tree — no orphan `claude`.
+
 ## 0.4.1
 
 - **Run feed fixes.** A finished run no longer prints its answer twice (the

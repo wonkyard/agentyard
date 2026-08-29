@@ -58,6 +58,44 @@ function buildClaudeArgs(opts) {
 }
 
 /**
+ * Builds the argv for an INTERACTIVE `claude` session — the one the Run view's
+ * embedded terminal runs. No `-p`, no `--output-format`: this is a real TTY, so
+ * Claude Code renders its own TUI (markdown, spinners, permission prompts) and
+ * the user answers prompts in the panel.
+ *
+ * Like `buildClaudeArgs`, this is pure — the extension does the spawn (via
+ * node-pty), the sanity test exercises this directly. `permissionMode` maps to
+ * the real `--permission-mode` flag (only when not `default`); `extraArgs` are
+ * appended verbatim.
+ *
+ * @param {object} opts
+ * @param {string} [opts.claudePath]     configured binary name/path (default "claude")
+ * @param {string} [opts.permissionMode] one of PERMISSION_MODES
+ * @param {string[]} [opts.extraArgs]    verbatim extra argv
+ * @returns {{command:string, args:string[]}}
+ */
+function buildInteractiveClaudeArgs(opts) {
+  opts = opts || {};
+  const args = [];
+
+  const mode = cleanStr(opts.permissionMode);
+  if (mode && mode !== 'default') {
+    if (PERMISSION_MODES.indexOf(mode) === -1) {
+      throw new Error('unknown claudePermissionMode: ' + mode);
+    }
+    args.push('--permission-mode', mode);
+  }
+
+  const extra = Array.isArray(opts.extraArgs) ? opts.extraArgs : [];
+  for (const a of extra) {
+    if (typeof a === 'string' && a.length) args.push(a);
+  }
+
+  const command = cleanStr(opts.claudePath) || 'claude';
+  return { command, args };
+}
+
+/**
  * Ordered list of executables to try for a bare command name. On Windows an
  * npm-installed CLI is usually `<name>.cmd`; a native install is `<name>.exe`.
  * If the caller already gave an explicit extension or a path separator we trust
@@ -74,4 +112,4 @@ function candidateCommands(command, platform) {
   return hasSep ? [base].concat(list.filter((x) => x !== base)) : list;
 }
 
-module.exports = { PERMISSION_MODES, buildClaudeArgs, candidateCommands };
+module.exports = { PERMISSION_MODES, buildClaudeArgs, buildInteractiveClaudeArgs, candidateCommands };

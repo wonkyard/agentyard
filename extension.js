@@ -7,10 +7,28 @@ const path = require('path');
 const cp = require('child_process');
 const { toDepartments } = require('./shared/frontmatter.js');
 const hooksConfig = require('./shared/hooksConfig.js');
-const { buildClaudeArgs, candidateCommands } = require('./shared/claudeArgs.js');
+const { buildClaudeArgs, buildInteractiveClaudeArgs, candidateCommands } = require('./shared/claudeArgs.js');
 const { needsCmdWrap, resolveLauncher } = require('./shared/winWrap.js');
 const { StreamJsonParser } = require('./shared/streamJson.js');
 const { killTree, spawnGroupOpts } = require('./shared/killTree.js');
+
+// node-pty powers the embedded terminal in the Run view. It is a native module;
+// if its prebuilt binary can't load on this platform/ABI we fall back to the
+// headless Run view instead of throwing on activation. See CLAUDE.md for the
+// Electron-ABI rebuild step when a future VS Code engine bump outruns the
+// shipped prebuilds.
+let nodePty = null;
+let nodePtyError = null;
+try {
+  nodePty = require('@homebridge/node-pty-prebuilt-multiarch');
+} catch (e) {
+  nodePtyError = (e && e.message) ? e.message : String(e);
+}
+
+const PTY_UNAVAILABLE_NOTICE =
+  "Live terminal needs a native component that didn't load on this platform — " +
+  'using the non-interactive runner. Run "Agentyard: Open Claude Code Terminal" ' +
+  'for a full session.';
 
 function nonce() {
   let s = '';
@@ -124,6 +142,37 @@ function resolveWinLauncher(command) {
     exists: (p) => fs.existsSync(p),
     nodePath: process.execPath,
   });
+}
+
+// Resolve the configured `claude` command to a concrete { file, args } that can
+// be handed to node-pty with NO shell — the same no-cmd.exe guarantee the
+// headless runner keeps (see shared/winWrap.js). Tries the platform candidate
+// list (claude.exe -> claude.cmd -> … on Windows); a `.cmd`/`.bat` shim is
+// resolved to the real executable it forwards to, never shelled. Returns null
+// if nothing runnable was found — the caller then tells the user to set an
+// explicit claudePath.
+function resolvePtyClaude(command, baseArgs) {
+  for (const cand of candidateCommands(command, process.platform)) {
+    if (needsCmdWrap(cand, process.platform)) {
+      const resolved = resolveWinLauncher(cand);
+      if (resolved) return { file: resolved.file, args: resolved.prefixArgs.concat(baseArgs) };
+      continue;
+    }
+    const found = whichSync(cand);
+    if (found) return { file: found, args: baseArgs.slice() };
+  }
+  return null;
+}
+
+// killTree() expects a child_process-shaped object. Wrap a node-pty IPty so its
+// whole process tree is taken down (taskkill /T on Windows, process-group
+// signal elsewhere) with no orphan `claude`.
+function ptyKillHandle(pty) {
+  return {
+    pid: pty.pid,
+    kill: (sig) => { try { pty.kill(sig); } catch (e) { /* ignore */ } },
+    once: (ev, cb) => { if (ev === 'exit') pty.onExit(() => cb()); },
+  };
 }
 
 function readRoster(primaryDir) {
@@ -608,6 +657,143 @@ class RunController {
   }
 }
 
+// ---- run Claude Code in an embedded terminal -----------------------
+// The Run view's xterm.js surface talks to this over the webview postMessage
+// channel. One pty per panel, kept here in the extension host so a webview
+// reload re-attaches to the running session instead of restarting it. Spawns
+// the user's own INTERACTIVE `claude` (never `-p`) with their existing CLI
+// auth — no API key. The command is always an argv array through node-pty, so
+// there is no shell and cmd.exe is never involved (v0.4 guarantee).
+class TerminalRun {
+  constructor(post) {
+    this.post = post; // (msg) => void, to the webview
+    this.pty = null;
+    this.cols = 80;
+    this.rows = 24;
+    this.buffer = []; // recent output chunks, replayed on re-attach
+    this.bufferLen = 0;
+  }
+
+  _bufferPush(data) {
+    this.buffer.push(data);
+    this.bufferLen += data.length;
+    const CAP = 256 * 1024; // enough to redraw a scrollback on reload, bounded
+    while (this.bufferLen > CAP && this.buffer.length > 1) {
+      this.bufferLen -= this.buffer.shift().length;
+    }
+  }
+
+  _say(text) {
+    this.post({ type: 'term', event: 'data', data: text });
+  }
+
+  // The webview's terminal has connected — first load, or after a reload.
+  attach(cols, rows) {
+    if (cols > 0 && rows > 0) { this.cols = cols; this.rows = rows; }
+    if (this.pty) {
+      try { this.pty.resize(this.cols, this.rows); } catch (e) { /* ignore */ }
+      this._say(this.buffer.join(''));
+      return;
+    }
+    if (!nodePty) {
+      this.post({ type: 'term', event: 'unavailable', message: PTY_UNAVAILABLE_NOTICE });
+      return;
+    }
+    this._spawn();
+  }
+
+  _spawn() {
+    const root = workspaceRoot();
+    if (!root) {
+      this._say('\r\n\x1b[33mOpen a workspace folder first — the terminal uses it as the ' +
+        'working directory.\x1b[0m\r\n');
+      return;
+    }
+    const cfg = vscode.workspace.getConfiguration('agentyard');
+    let built;
+    try {
+      built = buildInteractiveClaudeArgs({
+        claudePath: cfg.get('claudePath', 'claude'),
+        permissionMode: cfg.get('claudePermissionMode', 'default'),
+        extraArgs: cfg.get('claudeExtraArgs', []),
+      });
+    } catch (e) {
+      this._say('\r\n\x1b[31mBad Agentyard run config: ' + e.message + '\x1b[0m\r\n');
+      return;
+    }
+
+    const target = resolvePtyClaude(built.command, built.args);
+    if (!target) {
+      this._say('\r\n\x1b[31mCould not launch "' + built.command + '". Set agentyard.claudePath ' +
+        'to the Claude Code CLI — on Windows point it at claude.exe or a full path to the real ' +
+        'executable, not a .cmd/.bat shim.\x1b[0m\r\n');
+      return;
+    }
+
+    let pty;
+    try {
+      pty = nodePty.spawn(target.file, target.args, {
+        name: 'xterm-256color',
+        cwd: root,
+        env: process.env,
+        cols: this.cols,
+        rows: this.rows,
+      });
+    } catch (e) {
+      this._say('\r\n\x1b[31mcould not start the terminal: ' + e.message + '\x1b[0m\r\n');
+      return;
+    }
+
+    this.pty = pty;
+    this.buffer = [];
+    this.bufferLen = 0;
+    pty.onData((d) => {
+      if (this.pty !== pty) return;
+      this._bufferPush(d);
+      this.post({ type: 'term', event: 'data', data: d });
+    });
+    pty.onExit((e) => {
+      if (this.pty !== pty) return;
+      this.pty = null;
+      const code = e && typeof e.exitCode === 'number' ? e.exitCode : null;
+      this.post({ type: 'term', event: 'exit', code });
+    });
+  }
+
+  input(data) {
+    if (this.pty) {
+      try { this.pty.write(data); } catch (e) { /* ignore */ }
+      return;
+    }
+    // Typing into an exited terminal starts a fresh session.
+    if (nodePty && workspaceRoot()) this._spawn();
+  }
+
+  resize(cols, rows) {
+    if (cols > 0 && rows > 0) { this.cols = cols; this.rows = rows; }
+    if (this.pty) {
+      try { this.pty.resize(this.cols, this.rows); } catch (e) { /* ignore */ }
+    }
+  }
+
+  async newThread() {
+    await this._killPty();
+    this._say('\x1bc'); // full terminal reset
+    this._spawn();
+  }
+
+  _killPty() {
+    const pty = this.pty;
+    this.pty = null;
+    if (!pty) return Promise.resolve(true);
+    return killTree(ptyKillHandle(pty), { platform: process.platform });
+  }
+
+  dispose() {
+    this._killPty();
+  }
+}
+
 // ---- webview -------------------------------------------------------
 function getHtml(webview, extUri) {
   const n = nonce();
@@ -615,6 +801,11 @@ function getHtml(webview, extUri) {
     webview.asWebviewUri(vscode.Uri.joinPath(extUri, 'webview', ...seg)).toString();
   const wasmUrl = asset('vendor', 'sql-wasm.wasm');
   const cfg = vscode.workspace.getConfiguration('agentyard');
+  // The Run view runs a real terminal unless the user asked for the old headless
+  // feed, or node-pty could not load on this platform.
+  const runViewRequested = cfg.get('runView', 'terminal') === 'headless' ? 'headless' : 'terminal';
+  const ptyAvailable = !!nodePty;
+  const runView = (runViewRequested === 'terminal' && ptyAvailable) ? 'terminal' : 'headless';
   const csp = [
     "default-src 'none'",
     `img-src ${webview.cspSource} data:`,
@@ -626,8 +817,9 @@ function getHtml(webview, extUri) {
     `script-src 'nonce-${n}' 'wasm-unsafe-eval'`,
   ].join('; ');
 
-  const scripts = ['vendor/sql-wasm.js', 'js/palette.js', 'js/sprites.js', 'js/db.js',
-    'js/adapter.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/run.js', 'js/main.js']
+  const scripts = ['vendor/sql-wasm.js', 'vendor/xterm.js', 'vendor/xterm-addon-fit.js',
+    'js/palette.js', 'js/sprites.js', 'js/db.js', 'js/adapter.js', 'js/live.js', 'js/model.js',
+    'js/render.js', 'js/run.js', 'js/term.js', 'js/main.js']
     .map((s) => `<script nonce="${n}" src="${asset(...s.split('/'))}"></script>`)
     .join('\n  ');
 
@@ -637,12 +829,13 @@ function getHtml(webview, extUri) {
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="${csp}" />
   <link rel="stylesheet" href="${asset('css', 'style.css')}" />
+  <link rel="stylesheet" href="${asset('vendor', 'xterm.css')}" />
   <title>Agentyard</title>
 </head>
 <body class="panel">
   <div id="app">
     <header id="topbar">
-      <span class="brand">AGENTYARD<span class="ver">v0.4</span></span>
+      <span class="brand">AGENTYARD<span class="ver">v0.5</span></span>
       <span id="view-toggle">
         <button type="button" data-view="office" class="on">Office</button>
         <button type="button" data-view="run">Run</button>
@@ -654,6 +847,12 @@ function getHtml(webview, extUri) {
       <div id="status">connecting…</div>
     </div>
     <div id="run-pane" hidden>
+      <div id="run-notice" hidden></div>
+      <div id="run-term" hidden></div>
+      <div id="run-term-foot" hidden>
+        <button type="button" id="run-term-new">New thread</button>
+        <span id="run-term-meta"></span>
+      </div>
       <div id="run-feed"></div>
       <div id="run-bar">
         <div id="run-hint" hidden></div>
@@ -670,7 +869,7 @@ function getHtml(webview, extUri) {
     </div>
   </div>
   <script nonce="${n}">
-    window.AY_CONFIG = { mode: 'vscode', pollSeconds: ${JSON.stringify(cfg.get('pollSeconds', 3))}, wasmUrl: ${JSON.stringify(wasmUrl)} };
+    window.AY_CONFIG = { mode: 'vscode', pollSeconds: ${JSON.stringify(cfg.get('pollSeconds', 3))}, wasmUrl: ${JSON.stringify(wasmUrl)}, runView: ${JSON.stringify(runView)}, runViewRequested: ${JSON.stringify(runViewRequested)}, ptyAvailable: ${JSON.stringify(ptyAvailable)} };
   </script>
   ${scripts}
 </body>
@@ -711,6 +910,9 @@ class OfficeViewProvider {
     this.run = new RunController((m) => {
       if (this.view) this.view.webview.postMessage(m);
     });
+    this.term = new TerminalRun((m) => {
+      if (this.view) this.view.webview.postMessage(m);
+    });
   }
 
   pushData() {
@@ -731,6 +933,7 @@ class OfficeViewProvider {
     this.stop();
     this.live.stop();
     this.run.dispose();
+    this.term.dispose();
   }
 
   startWatchers() {
@@ -779,6 +982,12 @@ class OfficeViewProvider {
         else if (msg.action === 'new') this.run.newThread();
         else if (msg.action === 'status') this.run.pushStatus();
       }
+      if (msg.type === 'term') {
+        if (msg.event === 'attach') this.term.attach(msg.cols, msg.rows);
+        else if (msg.event === 'input') this.term.input(String(msg.data == null ? '' : msg.data));
+        else if (msg.event === 'resize') this.term.resize(msg.cols, msg.rows);
+        else if (msg.event === 'new') this.term.newThread();
+      }
     });
 
     webviewView.onDidChangeVisibility(() => {
@@ -787,12 +996,26 @@ class OfficeViewProvider {
 
     webviewView.onDidDispose(() => {
       this.stop();
+      // The panel is gone — kill the pty so no orphan `claude` is left behind.
+      this.term.dispose();
       this.view = null;
     });
 
     this.startWatchers();
     this.pushData();
   }
+}
+
+// Fallback (also just handy): open Claude Code in a normal VS Code integrated
+// terminal, in the workspace folder, using the configured claudePath. This is a
+// real shell the user drives, so a `.cmd`/`.bat` launcher is fine here — the
+// no-cmd.exe rule only applies to Agentyard spawning `claude` itself.
+function openClaudeTerminal() {
+  const root = workspaceRoot();
+  const claudePath = vscode.workspace.getConfiguration('agentyard').get('claudePath', 'claude');
+  const term = vscode.window.createTerminal({ name: 'Claude Code', cwd: root || undefined });
+  term.sendText(claudePath, true);
+  term.show();
 }
 
 function activate(context) {
@@ -815,7 +1038,8 @@ function activate(context) {
     ),
     vscode.commands.registerCommand('agentyard.disableLiveMode', () =>
       disableLiveMode().then(() => provider.pushData())
-    )
+    ),
+    vscode.commands.registerCommand('agentyard.openClaudeTerminal', openClaudeTerminal)
   );
   context.subscriptions.push({ dispose: () => provider.dispose() });
 }

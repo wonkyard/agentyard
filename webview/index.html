@@ -5,11 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Agentyard</title>
   <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="vendor/xterm.css" />
 </head>
 <body>
   <div id="app">
     <header id="topbar">
-      <span class="brand">AGENTYARD<span class="ver">v0.4</span></span>
+      <span class="brand">AGENTYARD<span class="ver">v0.5</span></span>
       <span id="view-toggle">
         <button type="button" data-view="office" class="on">Office</button>
         <button type="button" data-view="run">Run</button>
@@ -23,6 +24,12 @@
       <div id="status">connecting…</div>
     </div>
     <div id="run-pane" hidden>
+      <div id="run-notice" hidden></div>
+      <div id="run-term" hidden></div>
+      <div id="run-term-foot" hidden>
+        <button type="button" id="run-term-new">New thread</button>
+        <span id="run-term-meta"></span>
+      </div>
       <div id="run-feed"></div>
       <div id="run-bar">
         <div id="run-hint" hidden></div>
@@ -41,7 +48,9 @@
 
   <!-- AY_CONFIG: the VS Code extension overwrites this block at load time. -->
   <script>
-    window.AY_CONFIG = window.AY_CONFIG || { mode: 'browser', pollSeconds: 3, wasmUrl: 'vendor/sql-wasm.wasm' };
+    // The embedded terminal needs the extension host (node-pty), so the browser
+    // dev server always previews the headless feed.
+    window.AY_CONFIG = window.AY_CONFIG || { mode: 'browser', pollSeconds: 3, wasmUrl: 'vendor/sql-wasm.wasm', runView: 'headless', runViewRequested: 'headless', ptyAvailable: false };
     // ?shot -> lay the whole scene out flat for a full-page screenshot (dev only)
     if (location.search.indexOf('shot') !== -1) document.documentElement.className = 'shot';
     // ?view=run -> open the run view on load (dev / screenshot helper)
@@ -54,6 +63,8 @@
   </script>
 
   <script src="vendor/sql-wasm.js"></script>
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/xterm-addon-fit.js"></script>
   <script src="js/palette.js"></script>
   <script src="js/sprites.js"></script>
   <script src="js/db.js"></script>
@@ -62,6 +73,7 @@
   <script src="js/model.js"></script>
   <script src="js/render.js"></script>
   <script src="js/run.js"></script>
+  <script src="js/term.js"></script>
   <script src="js/main.js"></script>
 </body>
 </html>

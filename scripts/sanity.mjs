@@ -16,7 +16,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { toDepartments } = require('../shared/frontmatter.js');
 const hooksConfig = require('../shared/hooksConfig.js');
-const { buildClaudeArgs, candidateCommands } = require('../shared/claudeArgs.js');
+const { buildClaudeArgs, buildInteractiveClaudeArgs, candidateCommands } = require('../shared/claudeArgs.js');
 const { needsCmdWrap, parseCmdShim, tokenizeCmdLine, resolveLauncher } = require('../shared/winWrap.js');
 const { StreamJsonParser } = require('../shared/streamJson.js');
 const { killTree, isAlive } = require('../shared/killTree.js');
@@ -95,12 +95,13 @@ const win = {
     querySelectorAll: () => [], addEventListener() {} },
 };
 win.window = win;
-for (const f of ['js/palette.js', 'js/sprites.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/run.js']) {
+for (const f of ['js/palette.js', 'js/sprites.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/run.js', 'js/term.js']) {
   const code = fs.readFileSync(path.join(EXT_ROOT, 'webview', f), 'utf8');
   new Function('window', 'self', 'globalThis', 'module', 'document', code)(win, win, win, undefined, win.document);
 }
 check('webview namespace is AY', !!win.AY && !!win.AY.render && !!win.AY.sprites && !!win.AY.live);
 check('run view module loaded', !!win.AY.run && typeof win.AY.run.describe === 'function');
+check('terminal view module loaded', !!win.AY.term && typeof win.AY.term.init === 'function');
 const office = win.AY.model.build(
   { departments, teamRoles, dataMode: 'demo' },
   { projects, statuses }
@@ -168,7 +169,76 @@ check('run-view config props declared',
   !!cfgProps['agentyard.claudePermissionMode']);
 check('claudePermissionMode default is not a skip-permissions mode',
   cfgProps['agentyard.claudePermissionMode'].default === 'default');
-check('package version is 0.4.x', /^0\.4\./.test(pkg.version), pkg.version);
+check('package version is 0.5.x', /^0\.5\./.test(pkg.version), pkg.version);
+
+// --- 5b. v0.5 terminal: manifest wiring ---------------------------------
+check('runView config prop: enum terminal|headless, default terminal',
+  cfgProps['agentyard.runView'] &&
+  cfgProps['agentyard.runView'].default === 'terminal' &&
+  JSON.stringify(cfgProps['agentyard.runView'].enum) === JSON.stringify(['terminal', 'headless']));
+check('openClaudeTerminal fallback command present',
+  cmds.includes('agentyard.openClaudeTerminal'));
+check('claudeExtraArgs description dropped the "headless cannot answer prompts" note',
+  !/cannot answer permission prompts/i.test(cfgProps['agentyard.claudeExtraArgs'].description || ''));
+check('node-pty is a runtime dependency (not devDependency)',
+  !!(pkg.dependencies && pkg.dependencies['@homebridge/node-pty-prebuilt-multiarch']) &&
+  !(pkg.devDependencies && pkg.devDependencies['@homebridge/node-pty-prebuilt-multiarch']));
+
+// --- 5c. v0.5 terminal: xterm.js vendored, no CDN ----------------------
+for (const v of ['xterm.js', 'xterm.css', 'xterm-LICENSE', 'xterm-addon-fit.js', 'xterm-addon-fit-LICENSE']) {
+  check('vendored webview/vendor/' + v, fs.existsSync(path.join(EXT_ROOT, 'webview', 'vendor', v)));
+}
+check('xterm.js is a self-contained UMD build (no bundler, CSP-safe)',
+  /globalThis|self\)/.test(fs.readFileSync(path.join(EXT_ROOT, 'webview', 'vendor', 'xterm.js'), 'utf8').slice(0, 400)));
+{
+  const idxHtml = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'index.html'), 'utf8');
+  const extSrc0 = fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8');
+  check('no CDN reference for xterm anywhere',
+    !/cdn\.jsdelivr|unpkg\.com|cdnjs/i.test(idxHtml + extSrc0));
+}
+
+// --- 5d. v0.5 terminal: interactive argv is NOT headless -p ------------
+{
+  const it0 = buildInteractiveClaudeArgs({});
+  check('interactiveArgs: no -p / --print / --output-format (this is a real TTY)',
+    !it0.args.includes('-p') && !it0.args.includes('--print') && !it0.args.includes('--output-format'));
+  check('interactiveArgs: default command is claude, no permission flag, no dangerous flag',
+    it0.command === 'claude' && !it0.args.includes('--permission-mode') &&
+    !it0.args.join(' ').includes('dangerously'));
+  const itPlan = buildInteractiveClaudeArgs({
+    claudePath: 'claude.cmd', permissionMode: 'plan', extraArgs: ['--model', 'opus'],
+  });
+  check('interactiveArgs: plan mode -> --permission-mode plan',
+    itPlan.args[itPlan.args.indexOf('--permission-mode') + 1] === 'plan');
+  check('interactiveArgs: extra args appended verbatim, in order',
+    itPlan.args.slice(-2).join(' ') === '--model opus');
+  check('interactiveArgs: acceptEdits/bypassPermissions only when not default',
+    !buildInteractiveClaudeArgs({ permissionMode: 'default' }).args.includes('--permission-mode') &&
+    buildInteractiveClaudeArgs({ permissionMode: 'acceptEdits' }).args.includes('acceptEdits'));
+  check('interactiveArgs: unknown permission mode throws', (() => {
+    try { buildInteractiveClaudeArgs({ permissionMode: 'yolo' }); return false; }
+    catch (e) { return /unknown claudePermissionMode/.test(e.message); }
+  })());
+}
+
+// --- 5e. v0.5 terminal: pty spawn keeps the v0.4 no-cmd.exe guarantee --
+{
+  const extSrc = fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8');
+  check('terminal: pty spawns via node-pty with an argv array (no shell string)',
+    /nodePty\.spawn\(\s*target\.file,\s*target\.args,/.test(extSrc));
+  check('terminal: pty command resolved through the winWrap no-cmd.exe path',
+    /function resolvePtyClaude/.test(extSrc) &&
+    /needsCmdWrap\(cand, process\.platform\)/.test(extSrc) &&
+    /resolveWinLauncher\(cand\)/.test(extSrc) &&
+    /candidateCommands\(command, process\.platform\)/.test(extSrc));
+  check('terminal: node-pty require is guarded — activation never throws',
+    /try\s*{[\s\S]{0,120}nodePty = require\(/.test(extSrc) && /nodePtyError/.test(extSrc));
+  check('terminal: pty killed on panel dispose (no orphan claude)',
+    /onDidDispose\(\(\)\s*=>\s*{[\s\S]{0,160}this\.term\.dispose\(\)/.test(extSrc) &&
+    /killTree\(ptyKillHandle\(pty\)/.test(extSrc));
+  check('terminal: Run view falls back to headless when node-pty is missing',
+    /runViewRequested === 'terminal' && ptyAvailable\)\s*\?\s*'terminal'\s*:\s*'headless'/.test(extSrc));
+}
 // needles assembled from parts so this test file itself stays grep-clean
 const OLD_NAME = ['pixel', 'office'].join('-');
 const OLD_CFG = 'pixel' + 'Office';
@@ -179,8 +249,9 @@ check('no legacy config-key prefix', !JSON.stringify(pkg.contributes.configurati
 // --- 6. no legacy identifiers left in shipped code ----------------
 const shipped = ['extension.js', 'webview/index.html', 'webview/css/style.css',
   'webview/js/palette.js', 'webview/js/sprites.js', 'webview/js/db.js', 'webview/js/adapter.js',
-  'webview/js/model.js', 'webview/js/render.js', 'webview/js/run.js', 'webview/js/main.js',
-  'shared/claudeArgs.js', 'shared/winWrap.js', 'shared/streamJson.js', 'shared/killTree.js'];
+  'webview/js/model.js', 'webview/js/render.js', 'webview/js/run.js', 'webview/js/term.js',
+  'webview/js/main.js', 'shared/claudeArgs.js', 'shared/winWrap.js', 'shared/streamJson.js',
+  'shared/killTree.js'];
 let legacy = [];
 for (const f of shipped) {
   const txt = fs.readFileSync(path.join(EXT_ROOT, f), 'utf8');
