@@ -117,6 +117,7 @@
         nowMs: msg.nowMs || Date.now(),
         idleSeconds: msg.idleSeconds || 30,
         maxSpritesPerRoom: msg.maxSpritesPerRoom || 8,
+        platform: msg.platform || null, // §7: local_path match case-sensitivity
       };
       const w = waiters;
       waiters = [];

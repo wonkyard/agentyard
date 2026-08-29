@@ -70,7 +70,7 @@ const exec = (sql) => {
   });
 };
 const projects = exec(
-  'SELECT project_id, idea_summary, current_stage, updated_at, repo_url FROM projects ORDER BY created_at'
+  'SELECT project_id, idea_summary, current_stage, updated_at, repo_url, local_path FROM projects ORDER BY created_at'
 );
 const statuses = exec(
   `SELECT s.project_id, s.department, s.status, s.note, s.ts FROM status_log s
@@ -84,6 +84,12 @@ check('no example.com leak into real repos', projects.every((p) => !p.repo_url |
 const annexCount = projects.filter((p) => p.repo_url).length;
 check('annex projects have repo_url', annexCount === 2, annexCount + ' annexes');
 check('latest-status rows read', statuses.length >= 5, statuses.length + ' rows');
+check('demo projects: split repos carry a local_path, pre-split ones do not',
+  projects.filter((p) => p.local_path).length === annexCount &&
+  projects.every((p) => !p.local_path || p.repo_url));
+check('demo local_path values are synthetic (no real user dirs)',
+  projects.every((p) => !p.local_path ||
+    (/^\/demo\//.test(p.local_path) && !/[A-Za-z]:\\Users\\/.test(p.local_path) && !/\/home\/[^/]+\//.test(p.local_path))));
 
 // --- 3. load browser modules with a fake window ---------------------
 const stubNode = () => ({ style: {}, dataset: {}, classList: { add() {}, remove() {}, toggle() {} },
@@ -832,6 +838,100 @@ check('retainContextWhenHidden set',
   const termSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'term.js'), 'utf8');
   check('term.js: wires attachCustomKeyEventHandler to termclip.keyHandler',
     /attachCustomKeyEventHandler\(\s*\(e\)\s*=>\s*clip\.keyHandler\(e, clipIo\)\s*\)/.test(termSrc));
+}
+
+// --- 17. v1.0.0 §7: a build runner inside a repo lights that project's annex ---
+{
+  const B = Date.parse('2026-08-29T12:00:00Z');
+  const iso = (sec) => new Date(B + sec * 1000).toISOString();
+  const now = B + 5000;
+  const projA = { project_id: 'DEMO-A', idea_summary: 'repo A', current_stage: 'shipped',
+    updated_at: iso(0), repo_url: 'https://example.com/demo/repo-a', local_path: '/demo/ws/repo-a' };
+  const projB = { project_id: 'DEMO-B', idea_summary: 'repo B', current_stage: 'shipped',
+    updated_at: iso(0), repo_url: 'https://example.com/demo/repo-b', local_path: '/demo/ws/repo-b' };
+
+  const runnerIn = (cwd, summary, type) => ([
+    { ts: iso(0), hook_event_name: 'SessionStart', session_id: 'cs', cwd: '/home/dev/company' },
+    { ts: iso(1), hook_event_name: 'SubagentStart', session_id: 'cs', agent_id: 'r1',
+      agent_type: type || 'repo-team-runner' },
+    { ts: iso(3), hook_event_name: 'PreToolUse', session_id: 'cs', agent_id: 'r1',
+      agent_type: type || 'repo-team-runner', cwd, tool_name: 'Bash', tool_input_summary: summary },
+  ]);
+  const buildModel = (liveEvents, projects, platform) => win.AY.model.build(
+    { departments, teamRoles, dataMode: 'demo', liveEvents, hooksInstalled: true,
+      nowMs: now, idleSeconds: 30, platform: platform || 'linux' },
+    { projects, statuses: [] }
+  );
+
+  const o1 = buildModel(runnerIn('/demo/ws/repo-a/webview', 'npm run sanity'), [projA, projB]);
+  const a1 = o1.annexes.find((x) => x.projectId === 'DEMO-A');
+  const b1 = o1.annexes.find((x) => x.projectId === 'DEMO-B');
+  check('§7: the annex whose local_path holds the runner cwd is marked building',
+    a1 && a1.building === true && a1.team.length > 0 && a1.team.every((m) => m.status === 'working'),
+    a1 ? JSON.stringify(a1.team.map((m) => m.status)) : 'no annex');
+  check('§7: the runner tool line becomes the annex "doing" line',
+    a1 && a1.buildDoing === 'Bash: npm run sanity' &&
+    a1.team.every((m) => m.note === 'Bash: npm run sanity'));
+  check('§7: a project with no runner in its repo is left at its db status',
+    b1 && !b1.building && b1.team.every((m) => m.status === 'idle'));
+  check('§7: the attributed runner is NOT also drawn as a loose live-sub room',
+    !o1.liveRooms.some((r) => r.title === 'repo-team-runner') &&
+    o1.annexes.some((x) => x.building));
+
+  // degrade: projects present but no local_path -> today's behaviour
+  const o2 = buildModel(runnerIn('/demo/ws/repo-a', 'x'),
+    [{ ...projA, local_path: null }, { ...projB, local_path: null }]);
+  check('§7 degrade: no local_path -> no annex marked, runner shows as a live room',
+    o2.annexes.every((x) => !x.building) &&
+    o2.liveRooms.some((r) => r.title === 'repo-team-runner'));
+
+  // degrade: no company.db projects at all -> no throw
+  const o3 = buildModel(runnerIn('/demo/ws/repo-a', 'x'), []);
+  check('§7 degrade: no projects -> no throw, runner still shown',
+    o3.annexes.length === 0 && o3.liveRooms.some((r) => r.title === 'repo-team-runner'));
+
+  // Windows: backslash + case-insensitive match
+  const winEvents = [
+    { ts: iso(1), hook_event_name: 'SubagentStart', session_id: 'w', agent_id: 'rw', agent_type: 'repo-team-runner' },
+    { ts: iso(3), hook_event_name: 'PreToolUse', session_id: 'w', agent_id: 'rw', agent_type: 'repo-team-runner',
+      cwd: 'C:\\Users\\Dev\\WonkYard\\Repo-A\\src', tool_name: 'Edit', tool_input_summary: 'src/x.js' },
+  ];
+  const oW = buildModel(winEvents, [{ ...projA, local_path: 'c:/users/dev/wonkyard/repo-a' }], 'win32');
+  check('§7: Windows local_path match is slash-normalised + case-insensitive',
+    oW.annexes[0] && oW.annexes[0].building === true);
+  const oWlinux = buildModel(winEvents, [{ ...projA, local_path: 'c:/users/dev/wonkyard/repo-a' }], 'linux');
+  check('§7: a drive-letter path still matches case-insensitively without platform hint',
+    oWlinux.annexes[0] && oWlinux.annexes[0].building === true);
+
+  // role-hint: "[agentyard] project-lead -> project-eng" lights just that seat
+  const hintEvents = [
+    { ts: iso(1), hook_event_name: 'SubagentStart', session_id: 'h', agent_id: 'rh', agent_type: 'repo-team-runner' },
+    { ts: iso(2), hook_event_name: 'PreToolUse', session_id: 'h', agent_id: 'rh', agent_type: 'repo-team-runner',
+      cwd: '/demo/ws/repo-a', tool_name: 'Bash', tool_input_summary: 'echo [agentyard] project-lead -> project-eng' },
+    { ts: iso(4), hook_event_name: 'PreToolUse', session_id: 'h', agent_id: 'rh', agent_type: 'repo-team-runner',
+      cwd: '/demo/ws/repo-a', tool_name: 'Edit', tool_input_summary: 'src/y.js' },
+  ];
+  const oH = buildModel(hintEvents, [projA]);
+  const anxH = oH.annexes[0];
+  const engSeat = anxH.team.find((m) => /eng/.test(m.name));
+  const otherSeats = anxH.team.filter((m) => !/eng/.test(m.name));
+  check('§7: role hint parsed from the marker and lights only the matching seat',
+    anxH.building === true && anxH.buildPhase === 'project-eng' &&
+    engSeat && engSeat.status === 'working' && otherSeats.every((m) => m.status === 'idle'),
+    JSON.stringify(anxH.team.map((m) => m.name + ':' + m.status)));
+
+  // live.js exposes the phase field directly
+  const lv = win.AY.live.resolve(hintEvents, { nowMs: now, idleSeconds: 30 });
+  check('§7: live.resolve carries the phase marker on the agent',
+    lv.agents.some((a) => a.type === 'repo-team-runner' && a.phase === 'project-eng'));
+
+  try {
+    win.AY.render.render(ctx, o1, 5000, { selectedId: null });
+    win.AY.render.render(ctx, oH, 5000, { selectedId: 'team:DEMO-A:squad-eng' });
+    check('§7: render() draws a building annex without throwing', true);
+  } catch (e) {
+    check('§7: render() draws a building annex without throwing', false, e.message);
+  }
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

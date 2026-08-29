@@ -24,13 +24,24 @@
     });
   }
 
+  // `local_path` was added later (§7 annex attribution). Only select it when the
+  // column is actually present so an older company.db still reads cleanly.
+  function hasColumn(db, table, col) {
+    try {
+      return rows(db, `PRAGMA table_info(${table})`).some((r) => r.name === col);
+    } catch (e) {
+      return false;
+    }
+  }
+
   async function read(bytes, wasmUrl) {
     const SQL = await init(wasmUrl);
     const db = new SQL.Database(bytes);
     try {
+      const localPath = hasColumn(db, 'projects', 'local_path') ? ', local_path' : '';
       const projects = rows(
         db,
-        `SELECT project_id, idea_summary, current_stage, updated_at, repo_url
+        `SELECT project_id, idea_summary, current_stage, updated_at, repo_url${localPath}
            FROM projects ORDER BY created_at`
       );
       const statuses = rows(

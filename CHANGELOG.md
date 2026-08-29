@@ -25,6 +25,17 @@ All notable changes to Agentyard are recorded here.
   is cleared on Run-view init and **New thread**) and `agentyard.maxAttachmentMB`
   (default `10`). Attachments are always written inside the first workspace
   folder only, and the bytes are never logged.
+- **The office shows a project's team building its repo.** When a build runner is
+  live inside a split repo (a subagent whose working directory resolves inside
+  that project's `projects.local_path`, or the repo-build runner type), that
+  project's annex team (`project-lead` / `project-eng` / `release-check`) now
+  shows as **working** — with the runner's current tool as the "doing" line and
+  a `building…` sign — instead of sitting idle next to a loose runner sprite.
+  Data-driven from `company.db`; path matching is slash-normalised and
+  case-insensitive on Windows; with no `company.db` or no `local_path` match it
+  falls back to the previous behaviour. If the runner echoes a
+  `[agentyard] project-lead -> project-eng` phase marker, only the matching seat
+  lights up.
 
 ## 0.5.0
 

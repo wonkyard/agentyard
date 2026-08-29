@@ -20,6 +20,19 @@
   const TOOL_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure']);
   const CC_BUILTINS = ['Explore', 'Plan', 'general-purpose', 'Task'];
 
+  // Optional phase marker a repo build runner may echo at each role handoff:
+  //   [agentyard] project-lead -> project-eng   (or "→", or just "[agentyard] project-eng")
+  // The office lights the last role-like token named after the tag.
+  function phaseFromText(s) {
+    if (!s) return null;
+    const str = String(s);
+    const at = str.indexOf('[agentyard]');
+    if (at === -1) return null;
+    const tokens = str.slice(at + '[agentyard]'.length).match(/[a-z][a-z-]*[a-z]/gi);
+    if (!tokens || !tokens.length) return null;
+    return tokens[tokens.length - 1].toLowerCase();
+  }
+
   function ms(ts) {
     if (typeof ts === 'number') return ts;
     const s = String(ts || '');
@@ -103,6 +116,7 @@
           pendingPermission: false,
           permissionTs: 0,
           permissionTool: null,
+          phase: null, // latest "[agentyard] <role>" marker, if the runner echoes one
           ended: false,
           endedTs: 0,
         };
@@ -190,6 +204,8 @@
           summary: e.tool_input_summary || null,
         };
         a.lastToolFailed = name === 'PostToolUseFailure';
+        const ph = phaseFromText(e.tool_input_summary);
+        if (ph) a.phase = ph;
         if (name === 'PostToolUse' || name === 'PostToolUseFailure') {
           a.pendingPermission = false;
         }
@@ -248,6 +264,7 @@
         doing: doingLine(a),
         note: doingLine(a),
         tool: a.lastTool ? a.lastTool.name : null,
+        phase: a.phase || null,
         ts: lastTs ? new Date(lastTs).toISOString() : null,
         leaving: !!endedTs,
       });

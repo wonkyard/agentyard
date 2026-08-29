@@ -71,7 +71,12 @@ a keybinding.)
   yellow = haiku), and a status pip.
 - **Project annexes** — one building per project in `company.db` that has a
   non-NULL `repo_url`, each with its team (from
-  `templates/project-repo/.claude/agents/`, or the bundled default roles).
+  `templates/project-repo/.claude/agents/`, or the bundled default roles). When a
+  build runner is live inside that repo — a subagent whose working directory is
+  inside the project's `local_path`, or the repo-build runner type — the annex
+  team shows as **working** with a `building…` sign, so the office tells you which
+  product is being built right now. Falls back to the plain annex when there is
+  no `company.db` or `local_path`.
 - **Live status** — from `status_log` (latest row per `project_id` + `department`):
   - `working` → the agent sits at the desk, monitor on, a thought bubble showing
     the latest note.

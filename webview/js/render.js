@@ -393,8 +393,12 @@
     ctx.textBaseline = 'top';
     ctx.fillText(title, sx + 7, ay + 15);
     ctx.font = '9px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
-    ctx.fillStyle = P.textDim;
-    ctx.fillText(trunc(ctx, annex.stage, aw - 16), ax + 8, ay + 30);
+    // §7: while a build runner is live inside this repo, say so on the sign.
+    const stageText = annex.building
+      ? (annex.buildPhase ? 'building · ' + annex.buildPhase : 'building…')
+      : annex.stage;
+    ctx.fillStyle = annex.building ? P.working : P.textDim;
+    ctx.fillText(trunc(ctx, stageText, aw - 16), ax + 8, ay + 30);
 
     const rects = [];
     const n = annex.team.length;
