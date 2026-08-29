@@ -11,6 +11,7 @@ const { buildClaudeArgs, buildInteractiveClaudeArgs, candidateCommands } = requi
 const { needsCmdWrap, resolveLauncher } = require('./shared/winWrap.js');
 const { StreamJsonParser } = require('./shared/streamJson.js');
 const { killTree, spawnGroupOpts } = require('./shared/killTree.js');
+const attach = require('./shared/attach.js');
 
 // node-pty powers the embedded terminal in the Run view. It is a native module;
 // if its prebuilt binary can't load on this platform/ABI we fall back to the
@@ -794,6 +795,29 @@ class TerminalRun {
   }
 }
 
+// ---- clipboard + attachments for the Run view ---------------------
+// xterm.js has no clipboard behaviour of its own, and a webview's
+// navigator.clipboard is inconsistent across VS Code versions and focus states,
+// so the webview asks the extension host to read/write the system clipboard.
+// Attachments (picked files, pasted/dropped images) are turned into an input
+// string here — image bytes are written to a generated path strictly inside the
+// first workspace folder, size-guarded, and never logged.
+async function readClipboardText() {
+  try {
+    return await vscode.env.clipboard.readText();
+  } catch (e) {
+    return '';
+  }
+}
+
+async function writeClipboardText(text) {
+  try {
+    await vscode.env.clipboard.writeText(String(text == null ? '' : text));
+  } catch (e) {
+    /* ignore — nothing else depends on the write succeeding */
+  }
+}
+
 // ---- webview -------------------------------------------------------
 function getHtml(webview, extUri) {
   const n = nonce();
@@ -819,7 +843,7 @@ function getHtml(webview, extUri) {
 
   const scripts = ['vendor/sql-wasm.js', 'vendor/xterm.js', 'vendor/xterm-addon-fit.js',
     'js/palette.js', 'js/sprites.js', 'js/db.js', 'js/adapter.js', 'js/live.js', 'js/model.js',
-    'js/render.js', 'js/run.js', 'js/term.js', 'js/main.js']
+    'js/render.js', 'js/termclip.js', 'js/run.js', 'js/term.js', 'js/main.js']
     .map((s) => `<script nonce="${n}" src="${asset(...s.split('/'))}"></script>`)
     .join('\n  ');
 
@@ -835,7 +859,7 @@ function getHtml(webview, extUri) {
 <body class="panel">
   <div id="app">
     <header id="topbar">
-      <span class="brand">AGENTYARD<span class="ver">v0.5</span></span>
+      <span class="brand">AGENTYARD<span class="ver">v1.0</span></span>
       <span id="view-toggle">
         <button type="button" data-view="office" class="on">Office</button>
         <button type="button" data-view="run">Run</button>
@@ -850,6 +874,7 @@ function getHtml(webview, extUri) {
       <div id="run-notice" hidden></div>
       <div id="run-term" hidden></div>
       <div id="run-term-foot" hidden>
+        <button type="button" id="run-term-attach" class="attach-btn" title="Attach a file or image">📎 Attach</button>
         <button type="button" id="run-term-new">New thread</button>
         <span id="run-term-meta"></span>
       </div>
@@ -857,6 +882,7 @@ function getHtml(webview, extUri) {
       <div id="run-bar">
         <div id="run-hint" hidden></div>
         <div id="run-input-row">
+          <button type="button" id="run-attach" class="attach-btn" title="Attach a file or image">📎</button>
           <textarea id="run-input" rows="1" placeholder="Send a prompt to Claude Code in this workspace…"></textarea>
           <button type="button" id="run-send">Send</button>
           <button type="button" id="run-cancel" hidden>Cancel</button>
@@ -869,7 +895,7 @@ function getHtml(webview, extUri) {
     </div>
   </div>
   <script nonce="${n}">
-    window.AY_CONFIG = { mode: 'vscode', pollSeconds: ${JSON.stringify(cfg.get('pollSeconds', 3))}, wasmUrl: ${JSON.stringify(wasmUrl)}, runView: ${JSON.stringify(runView)}, runViewRequested: ${JSON.stringify(runViewRequested)}, ptyAvailable: ${JSON.stringify(ptyAvailable)} };
+    window.AY_CONFIG = { mode: 'vscode', pollSeconds: ${JSON.stringify(cfg.get('pollSeconds', 3))}, wasmUrl: ${JSON.stringify(wasmUrl)}, runView: ${JSON.stringify(runView)}, runViewRequested: ${JSON.stringify(runViewRequested)}, ptyAvailable: ${JSON.stringify(ptyAvailable)}, platform: ${JSON.stringify(process.platform)}, terminalCopyPaste: ${JSON.stringify(cfg.get('terminalCopyPaste', true))}, copyOnSelection: ${JSON.stringify(cfg.get('copyOnSelection', false))} };
   </script>
   ${scripts}
 </body>
@@ -896,6 +922,7 @@ function collectSnapshot(live) {
     idleSeconds: cfg.get('idleSeconds', 30),
     staleMinutes: cfg.get('staleMinutes', 15),
     maxSpritesPerRoom: cfg.get('maxSpritesPerRoom', 8),
+    platform: process.platform, // §7: case-insensitive local_path match on win32
     nowMs: Date.now(),
   };
 }
@@ -918,6 +945,81 @@ class OfficeViewProvider {
   pushData() {
     if (!this.view) return;
     this.view.webview.postMessage(collectSnapshot(this.live));
+  }
+
+  post(msg) {
+    if (this.view) this.view.webview.postMessage(msg);
+  }
+
+  // Run-view clipboard bridge. `write` puts the terminal selection on the system
+  // clipboard; `read` sends the clipboard text back so the webview can paste it.
+  handleClip(msg) {
+    if (msg.action === 'write') {
+      writeClipboardText(msg.text);
+    } else if (msg.action === 'read') {
+      readClipboardText().then((text) => this.post({ type: 'clip', event: 'text', text }));
+    }
+  }
+
+  // Run-view attachments. `pick` opens the native file dialog; `image` writes
+  // pasted/dropped image bytes to a generated path inside the workspace. Both
+  // reply with the exact text to splice into the input line — nothing is
+  // submitted, and neither the bytes nor the prompt are logged.
+  async handleAttach(msg) {
+    const cfg = vscode.workspace.getConfiguration('agentyard');
+    const root = workspaceRoot();
+    try {
+      if (msg.action === 'pick') {
+        const uris = await vscode.window.showOpenDialog({
+          canSelectMany: true,
+          openLabel: 'Attach',
+        });
+        if (!uris || !uris.length) return;
+        const text = attach.buildPathInsert(uris.map((u) => u.fsPath));
+        if (text) this.post({ type: 'attach', event: 'insert', text });
+        return;
+      }
+      if (msg.action === 'paths') {
+        // Drag & drop handed us real filesystem paths — quote them the same way
+        // as picked files (single source of truth in shared/attach.js).
+        const text = attach.buildPathInsert(Array.isArray(msg.paths) ? msg.paths : []);
+        if (text) this.post({ type: 'attach', event: 'insert', text });
+        return;
+      }
+      if (msg.action === 'image') {
+        if (!root) {
+          vscode.window.showWarningMessage('Open a folder to attach files.');
+          return;
+        }
+        let bytes;
+        try {
+          bytes = Buffer.from(String(msg.b64 || ''), 'base64');
+        } catch (e) {
+          return;
+        }
+        const target = attach.writePastedImage({
+          root,
+          dir: cfg.get('attachmentsDir', attach.DEFAULT_ATTACHMENTS_DIR),
+          bytes,
+          maxMB: cfg.get('maxAttachmentMB', attach.DEFAULT_MAX_ATTACHMENT_MB),
+          now: new Date(),
+          mime: msg.mime,
+        });
+        this.post({ type: 'attach', event: 'insert', text: attach.buildPathInsert([target]) });
+      }
+    } catch (e) {
+      vscode.window.showWarningMessage('Agentyard attach: ' + e.message);
+    }
+  }
+
+  // Called on Run-view init and on "New thread". Removes the attachments folder
+  // unless agentyard.keepAttachments is set. Only ever touches <workspace>/<dir>.
+  clearAttachments() {
+    const cfg = vscode.workspace.getConfiguration('agentyard');
+    if (cfg.get('keepAttachments', false)) return;
+    const root = workspaceRoot();
+    if (!root) return;
+    attach.clearAttachmentsDir(root, cfg.get('attachmentsDir', attach.DEFAULT_ATTACHMENTS_DIR));
   }
 
   stop() {
@@ -979,15 +1081,17 @@ class OfficeViewProvider {
       if (msg.type === 'run') {
         if (msg.action === 'send') this.run.send(msg.prompt, !!msg.resume);
         else if (msg.action === 'cancel') this.run.cancel();
-        else if (msg.action === 'new') this.run.newThread();
+        else if (msg.action === 'new') { this.run.newThread(); this.clearAttachments(); }
         else if (msg.action === 'status') this.run.pushStatus();
       }
       if (msg.type === 'term') {
         if (msg.event === 'attach') this.term.attach(msg.cols, msg.rows);
         else if (msg.event === 'input') this.term.input(String(msg.data == null ? '' : msg.data));
         else if (msg.event === 'resize') this.term.resize(msg.cols, msg.rows);
-        else if (msg.event === 'new') this.term.newThread();
+        else if (msg.event === 'new') { this.term.newThread(); this.clearAttachments(); }
       }
+      if (msg.type === 'clip') this.handleClip(msg);
+      if (msg.type === 'attach') this.handleAttach(msg);
     });
 
     webviewView.onDidChangeVisibility(() => {
@@ -1001,6 +1105,9 @@ class OfficeViewProvider {
       this.view = null;
     });
 
+    // A resolve is a Run-view init (first load or a window reload) — clear stale
+    // attachments unless the user asked to keep them.
+    this.clearAttachments();
     this.startWatchers();
     this.pushData();
   }

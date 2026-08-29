@@ -16,6 +16,62 @@
     return String(url).replace(/\/+$/, '').split('/').pop();
   }
 
+  // ---- §7: attribute an in-repo build runner to its project's annex -----
+  // The Chief of Staff dispatches a build into a split repo; an in-process
+  // runner acts as that repo's project-lead -> project-eng -> release-check
+  // inside `projects.local_path`. When we can see that (a live subagent whose
+  // cwd resolves inside a project's local_path, or the repo-build runner type),
+  // that project's annex team is the one working right now — not idle.
+  const REPO_RUNNER_TYPES = new Set(['repo-team-runner', 'repo-build-runner']);
+
+  function normPath(s) {
+    return String(s || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  }
+
+  // Is `child` the same as, or nested inside, `parent`? Slash-normalised, and
+  // case-insensitive when either side looks like a Windows path or we're told
+  // we're on win32.
+  function pathInside(child, parent, platform) {
+    let c = normPath(child);
+    let p = normPath(parent);
+    if (!c || !p) return false;
+    const winish = platform === 'win32' || /^[a-zA-Z]:/.test(c) || /^[a-zA-Z]:/.test(p);
+    if (winish) { c = c.toLowerCase(); p = p.toLowerCase(); }
+    return c === p || c.indexOf(p + '/') === 0;
+  }
+
+  // Does an annex team role match a phase marker token? Exact first, then
+  // tolerate project-lead / squad-lead / lead and similar naming.
+  function roleMatchesPhase(roleName, phase) {
+    if (!roleName || !phase) return false;
+    const r = String(roleName).toLowerCase();
+    const p = String(phase).toLowerCase();
+    if (r === p) return true;
+    const tail = p.replace(/^(project|repo)-/, '');
+    return r === tail || r.endsWith('-' + tail) || r.indexOf(tail) !== -1;
+  }
+
+  // Map each project that has a local_path to the freshest live runner agent
+  // building it. Empty when there is no company.db / no local_path / no match —
+  // callers then keep today's behaviour (loose runner sprite).
+  function attributeRunners(liveAgents, projects, platform) {
+    const withPath = projects.filter((p) => p.repo_url && p.local_path);
+    const hits = new Map();
+    if (!withPath.length) return hits;
+    for (const a of liveAgents) {
+      if (a.kind !== 'subagent' || a.leaving) continue;
+      const proj =
+        withPath.find((p) => pathInside(a.cwd, p.local_path, platform)) ||
+        (REPO_RUNNER_TYPES.has(a.type) && withPath.length === 1 ? withPath[0] : null);
+      if (!proj) continue;
+      const cur = hits.get(proj.project_id);
+      if (!cur || String(a.ts || '') > String(cur.agent.ts || '')) {
+        hits.set(proj.project_id, { agent: a, phase: a.phase || null });
+      }
+    }
+    return hits;
+  }
+
   function build(raw, dbResult) {
     const statuses = (dbResult && dbResult.statuses) || [];
     const projects = (dbResult && dbResult.projects) || [];
@@ -69,6 +125,30 @@
         }),
       }));
 
+    // §7: light the annex whose repo a build runner is live inside.
+    const runnerHits = attributeRunners(live.agents, projects, raw.platform);
+    const attributedKeys = new Set();
+    for (const anx of annexes) {
+      const hit = runnerHits.get(anx.projectId);
+      if (!hit) continue;
+      attributedKeys.add(hit.agent.key);
+      anx.building = true;
+      anx.buildRunner = hit.agent.type;
+      anx.buildDoing = hit.agent.doing || null;
+      anx.buildPhase = hit.phase || null;
+      const phaseRole = hit.phase
+        ? anx.team.find((m) => roleMatchesPhase(m.name, hit.phase))
+        : null;
+      for (const m of anx.team) {
+        if (phaseRole && m !== phaseRole) continue; // role hint -> just that seat
+        m.status = 'working';
+        m.note = hit.agent.doing || m.note;
+        m.doing = hit.agent.doing || m.doing || null;
+        m.ts = hit.agent.ts || m.ts;
+        m.building = true;
+      }
+    }
+
     const board = projects.map((p) => ({
       projectId: p.project_id,
       stage: p.current_stage,
@@ -97,6 +177,7 @@
     for (const a of live.agents) {
       if (a.kind !== 'subagent') continue;
       if (deptNames.has(a.type)) continue; // shown in its department room
+      if (attributedKeys.has(a.key)) continue; // shown as its project's annex (§7)
       if (!byType.has(a.type)) byType.set(a.type, []);
       byType.get(a.type).push(a);
     }

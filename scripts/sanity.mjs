@@ -70,7 +70,7 @@ const exec = (sql) => {
   });
 };
 const projects = exec(
-  'SELECT project_id, idea_summary, current_stage, updated_at, repo_url FROM projects ORDER BY created_at'
+  'SELECT project_id, idea_summary, current_stage, updated_at, repo_url, local_path FROM projects ORDER BY created_at'
 );
 const statuses = exec(
   `SELECT s.project_id, s.department, s.status, s.note, s.ts FROM status_log s
@@ -84,6 +84,12 @@ check('no example.com leak into real repos', projects.every((p) => !p.repo_url |
 const annexCount = projects.filter((p) => p.repo_url).length;
 check('annex projects have repo_url', annexCount === 2, annexCount + ' annexes');
 check('latest-status rows read', statuses.length >= 5, statuses.length + ' rows');
+check('demo projects: split repos carry a local_path, pre-split ones do not',
+  projects.filter((p) => p.local_path).length === annexCount &&
+  projects.every((p) => !p.local_path || p.repo_url));
+check('demo local_path values are synthetic (no real user dirs)',
+  projects.every((p) => !p.local_path ||
+    (/^\/demo\//.test(p.local_path) && !/[A-Za-z]:\\Users\\/.test(p.local_path) && !/\/home\/[^/]+\//.test(p.local_path))));
 
 // --- 3. load browser modules with a fake window ---------------------
 const stubNode = () => ({ style: {}, dataset: {}, classList: { add() {}, remove() {}, toggle() {} },
@@ -95,13 +101,16 @@ const win = {
     querySelectorAll: () => [], addEventListener() {} },
 };
 win.window = win;
-for (const f of ['js/palette.js', 'js/sprites.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/run.js', 'js/term.js']) {
+for (const f of ['js/palette.js', 'js/sprites.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/termclip.js', 'js/run.js', 'js/term.js']) {
   const code = fs.readFileSync(path.join(EXT_ROOT, 'webview', f), 'utf8');
   new Function('window', 'self', 'globalThis', 'module', 'document', code)(win, win, win, undefined, win.document);
 }
 check('webview namespace is AY', !!win.AY && !!win.AY.render && !!win.AY.sprites && !!win.AY.live);
 check('run view module loaded', !!win.AY.run && typeof win.AY.run.describe === 'function');
 check('terminal view module loaded', !!win.AY.term && typeof win.AY.term.init === 'function');
+check('terminal clipboard module loaded',
+  !!win.AY.termclip && typeof win.AY.termclip.keyHandler === 'function' &&
+  typeof win.AY.termclip.firstImageFile === 'function');
 const office = win.AY.model.build(
   { departments, teamRoles, dataMode: 'demo' },
   { projects, statuses }
@@ -169,7 +178,7 @@ check('run-view config props declared',
   !!cfgProps['agentyard.claudePermissionMode']);
 check('claudePermissionMode default is not a skip-permissions mode',
   cfgProps['agentyard.claudePermissionMode'].default === 'default');
-check('package version is 0.5.x', /^0\.5\./.test(pkg.version), pkg.version);
+check('package version is 1.0.0', pkg.version === '1.0.0', pkg.version);
 
 // --- 5b. v0.5 terminal: manifest wiring ---------------------------------
 check('runView config prop: enum terminal|headless, default terminal',
@@ -250,8 +259,8 @@ check('no legacy config-key prefix', !JSON.stringify(pkg.contributes.configurati
 const shipped = ['extension.js', 'webview/index.html', 'webview/css/style.css',
   'webview/js/palette.js', 'webview/js/sprites.js', 'webview/js/db.js', 'webview/js/adapter.js',
   'webview/js/model.js', 'webview/js/render.js', 'webview/js/run.js', 'webview/js/term.js',
-  'webview/js/main.js', 'shared/claudeArgs.js', 'shared/winWrap.js', 'shared/streamJson.js',
-  'shared/killTree.js'];
+  'webview/js/termclip.js', 'webview/js/main.js', 'shared/claudeArgs.js', 'shared/winWrap.js',
+  'shared/streamJson.js', 'shared/killTree.js', 'shared/attach.js'];
 let legacy = [];
 for (const f of shipped) {
   const txt = fs.readFileSync(path.join(EXT_ROOT, f), 'utf8');
@@ -645,9 +654,16 @@ check('no legacy identifiers in shipped code', legacy.length === 0, legacy.join(
     detached: process.platform !== 'win32',
   });
   let grandPid = 0;
-  child.stdout.on('data', (d) => { grandPid = parseInt(String(d).trim(), 10) || grandPid; });
-
-  await new Promise((r) => setTimeout(r, 400));
+  const gotGrandPid = new Promise((resolve) => {
+    child.stdout.on('data', (d) => {
+      grandPid = parseInt(String(d).trim(), 10) || grandPid;
+      if (grandPid > 0) resolve();
+    });
+  });
+  // Wait for the grandchild to actually report its pid (bounded), not a fixed
+  // sleep — a busy machine can take well over 400ms to spawn a second node.
+  await Promise.race([gotGrandPid, new Promise((r) => setTimeout(r, 5000))]);
+  await new Promise((r) => setTimeout(r, 100));
   const parentPid = child.pid;
   check('cancel: test processes are alive before kill',
     isAlive(parentPid) && grandPid > 0 && isAlive(grandPid), 'parent=' + parentPid + ' grand=' + grandPid);
@@ -666,6 +682,257 @@ check('extension registers WebviewViewProvider',
     fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8')));
 check('retainContextWhenHidden set',
   /retainContextWhenHidden:\s*true/.test(fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8')));
+
+// --- 14. v1.0.0: Run-view terminal clipboard key handler -------------
+{
+  const K = win.AY.termclip;
+  const mk = (over) => Object.assign(
+    { type: 'keydown', key: 'c', ctrlKey: false, shiftKey: false, metaKey: false }, over);
+  let copied = null;
+  let pasted = 0;
+  const io = (over) => Object.assign({
+    platform: 'linux',
+    enabled: true,
+    hasSelection: () => false,
+    getSelection: () => 'THE SELECTION',
+    copy: (t) => { copied = t; },
+    paste: () => { pasted++; },
+  }, over);
+
+  copied = null;
+  check('key: Ctrl+C with a selection copies the selection and is swallowed',
+    K.keyHandler(mk({ ctrlKey: true }), io({ hasSelection: () => true })) === false &&
+    copied === 'THE SELECTION');
+  copied = null;
+  check('key: Ctrl+C with NO selection passes through (still SIGINT)',
+    K.keyHandler(mk({ ctrlKey: true }), io()) === true && copied === null);
+  check('key: Ctrl+Shift+C always copies, never SIGINT',
+    K.keyHandler(mk({ key: 'c', ctrlKey: true, shiftKey: true }), io()) === false);
+  pasted = 0;
+  check('key: Ctrl+V pastes and is swallowed',
+    K.keyHandler(mk({ key: 'v', ctrlKey: true }), io()) === false && pasted === 1);
+  check('key: Ctrl+Shift+V pastes', K.keyHandler(mk({ key: 'v', ctrlKey: true, shiftKey: true }), io()) === false);
+  check('key: Shift+Insert pastes', K.keyHandler(mk({ key: 'Insert', shiftKey: true }), io()) === false);
+  check('key: a plain letter is untouched', K.keyHandler(mk({ key: 'a' }), io()) === true);
+  check('key: keyup events are ignored',
+    K.keyHandler(mk({ type: 'keyup', key: 'v', ctrlKey: true }), io()) === true);
+  check('key: disabled -> everything passes through even with a selection',
+    K.keyHandler(mk({ key: 'c', ctrlKey: true }), io({ enabled: false, hasSelection: () => true })) === true);
+  copied = null;
+  check('key: Cmd+C on macOS with a selection copies',
+    K.keyHandler(mk({ key: 'c', metaKey: true }), io({ platform: 'darwin', hasSelection: () => true })) === false &&
+    copied === 'THE SELECTION');
+  check('key: plain Ctrl+C on macOS still passes through (SIGINT is Ctrl, not Cmd)',
+    K.keyHandler(mk({ key: 'c', ctrlKey: true }), io({ platform: 'darwin' })) === true);
+
+  check('termclip.firstImageFile: pulls an image/* file item out of a DataTransfer',
+    (() => {
+      const fakeFile = { type: 'image/png' };
+      const dt = { items: [{ kind: 'file', type: 'image/png', getAsFile: () => fakeFile }] };
+      return K.firstImageFile(dt) === fakeFile && K.firstImageFile({ items: [] }) === null;
+    })());
+}
+
+// --- 15. v1.0.0: attachment path-insert builder + image temp write ---
+{
+  const A = require('../shared/attach.js');
+
+  check('attach: a plain path is inserted unquoted',
+    A.buildPathInsert(['/home/dev/notes.md']) === '/home/dev/notes.md');
+  check('attach: a path containing whitespace is wrapped in double quotes',
+    A.buildPathInsert(['/home/dev/my notes.md']) === '"/home/dev/my notes.md"');
+  check('attach: multiple paths are space-joined, each quoted iff it has whitespace',
+    A.buildPathInsert(['/a/b.txt', '/c/d e.txt']) === '/a/b.txt "/c/d e.txt"');
+  check('attach: a CR or LF anywhere in a path is rejected', (() => {
+    for (const bad of ['/a/b\nc', '/a/b\rc']) {
+      try { A.buildPathInsert([bad]); return false; } catch (e) { /* expected */ }
+    }
+    return true;
+  })());
+
+  const root = process.platform === 'win32' ? 'C:\\ws' : '/ws';
+  const attachDir = A.DEFAULT_ATTACHMENTS_DIR;
+  const writes = {};
+  const mkdirs = [];
+  const fakeIo = {
+    mkdirSync: (p) => { mkdirs.push(p); },
+    writeFileSync: (p, b) => { writes[p] = b; },
+  };
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const out = A.writePastedImage(
+    { root, dir: attachDir, bytes: png, maxMB: 10, now: new Date('2026-08-29T12:34:56.789Z'), mime: 'image/png' },
+    fakeIo
+  );
+  check('attach: image is written strictly inside <root>/<attachmentsDir>',
+    out === path.join(path.resolve(root, attachDir), 'paste-2026-08-29T12-34-56-789Z.png') &&
+    writes[out] === png, out);
+  check('attach: the mkdir target is inside the workspace too',
+    mkdirs.length === 1 && !path.relative(path.resolve(root), mkdirs[0]).startsWith('..'));
+  check('attach: the generated filename carries no caller-supplied text',
+    /[/\\]paste-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.png$/.test(out));
+  check('attach: a payload over maxAttachmentMB is rejected', (() => {
+    try {
+      A.writePastedImage({ root, dir: attachDir, bytes: Buffer.alloc(2 * 1024 * 1024), maxMB: 1, now: 0 }, fakeIo);
+      return false;
+    } catch (e) { return /larger than the 1 MB/.test(e.message); }
+  })());
+  check('attach: no workspace folder -> rejected, nothing written', (() => {
+    try { A.writePastedImage({ root: null, bytes: png, now: 0 }, fakeIo); return false; }
+    catch (e) { return /folder/.test(e.message); }
+  })());
+  check('attach: a dir that climbs out of the workspace is refused', (() => {
+    try { A.resolveInsideWorkspace(root, '../evil', 'x.png'); return false; }
+    catch (e) { return /escapes the workspace/.test(e.message); }
+  })());
+
+  let cleared = null;
+  A.clearAttachmentsDir(root, attachDir, { rmSync: (p) => { cleared = p; } });
+  check('attach: clearAttachmentsDir targets exactly <root>/<attachmentsDir>',
+    cleared === path.resolve(root, attachDir));
+  cleared = null;
+  A.clearAttachmentsDir(root, '../..', { rmSync: (p) => { cleared = p; } });
+  check('attach: clearAttachmentsDir refuses to climb out of the workspace', cleared === null);
+  cleared = null;
+  A.clearAttachmentsDir(root, '', { rmSync: (p) => { cleared = p; } });
+  check('attach: clearAttachmentsDir with no dir is a no-op', cleared === null);
+}
+
+// --- 16. v1.0.0: manifest + extension wiring for clipboard/attach ----
+{
+  check('manifest: version is exactly 1.0.0', pkg.version === '1.0.0');
+  check('manifest: keywords include "claude code" and "terminal"',
+    Array.isArray(pkg.keywords) && pkg.keywords.includes('claude code') && pkg.keywords.includes('terminal'));
+  check('manifest: galleryBanner is set (dark, #1e1e2e)',
+    pkg.galleryBanner && pkg.galleryBanner.color === '#1e1e2e' && pkg.galleryBanner.theme === 'dark');
+  const cp2 = (((pkg.contributes || {}).configuration || {}).properties) || {};
+  for (const key of ['agentyard.terminalCopyPaste', 'agentyard.copyOnSelection',
+    'agentyard.attachmentsDir', 'agentyard.keepAttachments', 'agentyard.maxAttachmentMB']) {
+    check('manifest: config prop ' + key + ' is declared', !!cp2[key]);
+  }
+  check('manifest: terminalCopyPaste defaults to true', cp2['agentyard.terminalCopyPaste'].default === true);
+  check('manifest: copyOnSelection defaults to false', cp2['agentyard.copyOnSelection'].default === false);
+  check('manifest: attachmentsDir defaults to .agentyard/tmp',
+    cp2['agentyard.attachmentsDir'].default === '.agentyard/tmp');
+  check('manifest: keepAttachments defaults to false', cp2['agentyard.keepAttachments'].default === false);
+  check('manifest: maxAttachmentMB defaults to 10', cp2['agentyard.maxAttachmentMB'].default === 10);
+
+  const extSrc = fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8');
+  check('extension: uses the shared/attach.js helpers',
+    /require\(['"]\.\/shared\/attach(\.js)?['"]\)/.test(extSrc) && /attach\.writePastedImage\(/.test(extSrc));
+  check('extension: clipboard goes through vscode.env.clipboard, not a webview navigator',
+    /vscode\.env\.clipboard\.readText\(/.test(extSrc) && /vscode\.env\.clipboard\.writeText\(/.test(extSrc));
+  check('extension: picks files via showOpenDialog and inserts, never submits',
+    /showOpenDialog\(/.test(extSrc) && /event: 'insert'/.test(extSrc));
+  check('extension: never console.logs the attachment bytes or the prompt',
+    !/console\.\w+\([^)]*\bb64\b/.test(extSrc) && !/console\.\w+\([^)]*\bbytes\b/.test(extSrc) &&
+    !/console\.\w+\([^)]*\bprompt\b/.test(extSrc));
+  check('extension: clears the attachments dir when keepAttachments is false',
+    /keepAttachments/.test(extSrc) && /clearAttachmentsDir/.test(extSrc));
+  check('extension: passes platform + copy/paste config into the webview',
+    /platform: \$\{JSON\.stringify\(process\.platform\)\}/.test(extSrc) &&
+    /terminalCopyPaste:/.test(extSrc));
+
+  const termClipSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'termclip.js'), 'utf8');
+  check('termclip: no direct clipboard or network access in the webview module',
+    !/navigator\.clipboard/.test(termClipSrc) && !/fetch\(/.test(termClipSrc));
+  const termSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'term.js'), 'utf8');
+  check('term.js: wires attachCustomKeyEventHandler to termclip.keyHandler',
+    /attachCustomKeyEventHandler\(\s*\(e\)\s*=>\s*clip\.keyHandler\(e, clipIo\)\s*\)/.test(termSrc));
+}
+
+// --- 17. v1.0.0 §7: a build runner inside a repo lights that project's annex ---
+{
+  const B = Date.parse('2026-08-29T12:00:00Z');
+  const iso = (sec) => new Date(B + sec * 1000).toISOString();
+  const now = B + 5000;
+  const projA = { project_id: 'DEMO-A', idea_summary: 'repo A', current_stage: 'shipped',
+    updated_at: iso(0), repo_url: 'https://example.com/demo/repo-a', local_path: '/demo/ws/repo-a' };
+  const projB = { project_id: 'DEMO-B', idea_summary: 'repo B', current_stage: 'shipped',
+    updated_at: iso(0), repo_url: 'https://example.com/demo/repo-b', local_path: '/demo/ws/repo-b' };
+
+  const runnerIn = (cwd, summary, type) => ([
+    { ts: iso(0), hook_event_name: 'SessionStart', session_id: 'cs', cwd: '/home/dev/company' },
+    { ts: iso(1), hook_event_name: 'SubagentStart', session_id: 'cs', agent_id: 'r1',
+      agent_type: type || 'repo-team-runner' },
+    { ts: iso(3), hook_event_name: 'PreToolUse', session_id: 'cs', agent_id: 'r1',
+      agent_type: type || 'repo-team-runner', cwd, tool_name: 'Bash', tool_input_summary: summary },
+  ]);
+  const buildModel = (liveEvents, projects, platform) => win.AY.model.build(
+    { departments, teamRoles, dataMode: 'demo', liveEvents, hooksInstalled: true,
+      nowMs: now, idleSeconds: 30, platform: platform || 'linux' },
+    { projects, statuses: [] }
+  );
+
+  const o1 = buildModel(runnerIn('/demo/ws/repo-a/webview', 'npm run sanity'), [projA, projB]);
+  const a1 = o1.annexes.find((x) => x.projectId === 'DEMO-A');
+  const b1 = o1.annexes.find((x) => x.projectId === 'DEMO-B');
+  check('§7: the annex whose local_path holds the runner cwd is marked building',
+    a1 && a1.building === true && a1.team.length > 0 && a1.team.every((m) => m.status === 'working'),
+    a1 ? JSON.stringify(a1.team.map((m) => m.status)) : 'no annex');
+  check('§7: the runner tool line becomes the annex "doing" line',
+    a1 && a1.buildDoing === 'Bash: npm run sanity' &&
+    a1.team.every((m) => m.note === 'Bash: npm run sanity'));
+  check('§7: a project with no runner in its repo is left at its db status',
+    b1 && !b1.building && b1.team.every((m) => m.status === 'idle'));
+  check('§7: the attributed runner is NOT also drawn as a loose live-sub room',
+    !o1.liveRooms.some((r) => r.title === 'repo-team-runner') &&
+    o1.annexes.some((x) => x.building));
+
+  // degrade: projects present but no local_path -> today's behaviour
+  const o2 = buildModel(runnerIn('/demo/ws/repo-a', 'x'),
+    [{ ...projA, local_path: null }, { ...projB, local_path: null }]);
+  check('§7 degrade: no local_path -> no annex marked, runner shows as a live room',
+    o2.annexes.every((x) => !x.building) &&
+    o2.liveRooms.some((r) => r.title === 'repo-team-runner'));
+
+  // degrade: no company.db projects at all -> no throw
+  const o3 = buildModel(runnerIn('/demo/ws/repo-a', 'x'), []);
+  check('§7 degrade: no projects -> no throw, runner still shown',
+    o3.annexes.length === 0 && o3.liveRooms.some((r) => r.title === 'repo-team-runner'));
+
+  // Windows: backslash + case-insensitive match
+  const winEvents = [
+    { ts: iso(1), hook_event_name: 'SubagentStart', session_id: 'w', agent_id: 'rw', agent_type: 'repo-team-runner' },
+    { ts: iso(3), hook_event_name: 'PreToolUse', session_id: 'w', agent_id: 'rw', agent_type: 'repo-team-runner',
+      cwd: 'C:\\Users\\Dev\\WonkYard\\Repo-A\\src', tool_name: 'Edit', tool_input_summary: 'src/x.js' },
+  ];
+  const oW = buildModel(winEvents, [{ ...projA, local_path: 'c:/users/dev/wonkyard/repo-a' }], 'win32');
+  check('§7: Windows local_path match is slash-normalised + case-insensitive',
+    oW.annexes[0] && oW.annexes[0].building === true);
+  const oWlinux = buildModel(winEvents, [{ ...projA, local_path: 'c:/users/dev/wonkyard/repo-a' }], 'linux');
+  check('§7: a drive-letter path still matches case-insensitively without platform hint',
+    oWlinux.annexes[0] && oWlinux.annexes[0].building === true);
+
+  // role-hint: "[agentyard] project-lead -> project-eng" lights just that seat
+  const hintEvents = [
+    { ts: iso(1), hook_event_name: 'SubagentStart', session_id: 'h', agent_id: 'rh', agent_type: 'repo-team-runner' },
+    { ts: iso(2), hook_event_name: 'PreToolUse', session_id: 'h', agent_id: 'rh', agent_type: 'repo-team-runner',
+      cwd: '/demo/ws/repo-a', tool_name: 'Bash', tool_input_summary: 'echo [agentyard] project-lead -> project-eng' },
+    { ts: iso(4), hook_event_name: 'PreToolUse', session_id: 'h', agent_id: 'rh', agent_type: 'repo-team-runner',
+      cwd: '/demo/ws/repo-a', tool_name: 'Edit', tool_input_summary: 'src/y.js' },
+  ];
+  const oH = buildModel(hintEvents, [projA]);
+  const anxH = oH.annexes[0];
+  const engSeat = anxH.team.find((m) => /eng/.test(m.name));
+  const otherSeats = anxH.team.filter((m) => !/eng/.test(m.name));
+  check('§7: role hint parsed from the marker and lights only the matching seat',
+    anxH.building === true && anxH.buildPhase === 'project-eng' &&
+    engSeat && engSeat.status === 'working' && otherSeats.every((m) => m.status === 'idle'),
+    JSON.stringify(anxH.team.map((m) => m.name + ':' + m.status)));
+
+  // live.js exposes the phase field directly
+  const lv = win.AY.live.resolve(hintEvents, { nowMs: now, idleSeconds: 30 });
+  check('§7: live.resolve carries the phase marker on the agent',
+    lv.agents.some((a) => a.type === 'repo-team-runner' && a.phase === 'project-eng'));
+
+  try {
+    win.AY.render.render(ctx, o1, 5000, { selectedId: null });
+    win.AY.render.render(ctx, oH, 5000, { selectedId: 'team:DEMO-A:squad-eng' });
+    check('§7: render() draws a building annex without throwing', true);
+  } catch (e) {
+    check('§7: render() draws a building annex without throwing', false, e.message);
+  }
+}
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 process.exitCode = failures === 0 ? 0 : 1;

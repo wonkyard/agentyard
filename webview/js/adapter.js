@@ -25,6 +25,15 @@
       termInput() {},
       termResize() {},
       termNew() {},
+      // Clipboard + attachments are extension-host features; in the browser dev
+      // server they are no-ops (the terminal itself isn't available here).
+      onClip() {},
+      onAttach() {},
+      clipWrite() {},
+      clipRead() {},
+      attachPick() {},
+      attachPaths() {},
+      attachImage() {},
       async runSample() {
         try {
           const res = await fetch('api/run-sample', { cache: 'no-store' });
@@ -68,6 +77,8 @@
     let waiters = [];
     const runListeners = [];
     const termListeners = [];
+    const clipListeners = [];
+    const attachListeners = [];
 
     root.addEventListener('message', (ev) => {
       const msg = ev.data || {};
@@ -83,6 +94,18 @@
         });
         return;
       }
+      if (msg.type === 'clip') {
+        clipListeners.forEach((fn) => {
+          try { fn(msg); } catch (e) { /* ignore */ }
+        });
+        return;
+      }
+      if (msg.type === 'attach') {
+        attachListeners.forEach((fn) => {
+          try { fn(msg); } catch (e) { /* ignore */ }
+        });
+        return;
+      }
       if (msg.type !== 'data') return;
       latest = {
         dataMode: msg.dataMode || 'workspace',
@@ -94,6 +117,7 @@
         nowMs: msg.nowMs || Date.now(),
         idleSeconds: msg.idleSeconds || 30,
         maxSpritesPerRoom: msg.maxSpritesPerRoom || 8,
+        platform: msg.platform || null, // §7: local_path match case-sensitivity
       };
       const w = waiters;
       waiters = [];
@@ -127,6 +151,27 @@
       },
       termNew() {
         vscode.postMessage({ type: 'term', event: 'new' });
+      },
+      onClip(fn) {
+        if (typeof fn === 'function') clipListeners.push(fn);
+      },
+      onAttach(fn) {
+        if (typeof fn === 'function') attachListeners.push(fn);
+      },
+      clipWrite(text) {
+        vscode.postMessage({ type: 'clip', action: 'write', text: String(text == null ? '' : text) });
+      },
+      clipRead() {
+        vscode.postMessage({ type: 'clip', action: 'read' });
+      },
+      attachPick() {
+        vscode.postMessage({ type: 'attach', action: 'pick' });
+      },
+      attachPaths(paths) {
+        vscode.postMessage({ type: 'attach', action: 'paths', paths: (paths || []).map(String) });
+      },
+      attachImage(b64, mime) {
+        vscode.postMessage({ type: 'attach', action: 'image', b64: String(b64 || ''), mime: String(mime || '') });
       },
       runStatus() {
         vscode.postMessage({ type: 'run', action: 'status' });

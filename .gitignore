@@ -2,6 +2,13 @@ node_modules/
 *.vsix
 .DS_Store
 
+# Run-view attachment scratch dir (agentyard.attachmentsDir default) — pasted /
+# dropped images live here only until their path is in a prompt.
+.agentyard/
+
+# Process reports point at company-internal TOOL-* paths; the repo is public.
+/reports/
+
 # The synthetic demo fixtures (dev-data/agents, dev-data/team, dev-data/demo.db)
 # ARE tracked. Never commit real-workspace data copied in for local testing:
 /dev-data/real/

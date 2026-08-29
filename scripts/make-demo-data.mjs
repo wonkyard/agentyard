@@ -68,7 +68,8 @@ const db = new SQL.Database();
 db.run(`
 CREATE TABLE projects (
   project_id TEXT PRIMARY KEY, idea_summary TEXT NOT NULL, created_at TEXT NOT NULL,
-  current_stage TEXT NOT NULL DEFAULT 'research', updated_at TEXT NOT NULL, repo_url TEXT
+  current_stage TEXT NOT NULL DEFAULT 'research', updated_at TEXT NOT NULL, repo_url TEXT,
+  local_path TEXT
 );
 CREATE TABLE gate_decisions (
   id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, gate TEXT NOT NULL,
@@ -84,16 +85,18 @@ CREATE TABLE project_reports (
 );
 `);
 
+// local_path is a SYNTHETIC placeholder — never a real machine path. Split repos
+// carry one (used by §7 annex-attribution); pre-split ideas don't.
 const projects = [
-  ['DEMO-0001', 'Talking toaster companion app', 'building', null],
-  ['DEMO-0002', 'Cloud garden subscription box', 'launch-ready', 'https://example.com/demo/cloud-garden'],
-  ['DEMO-0003', 'Retro synth keyboard firmware', 'shipped', 'https://example.com/demo/retro-synth'],
-  ['DEMO-0004', 'Pocket weather balloon kit', 'killed', null],
+  ['DEMO-0001', 'Talking toaster companion app', 'building', null, null],
+  ['DEMO-0002', 'Cloud garden subscription box', 'launch-ready', 'https://example.com/demo/cloud-garden', '/demo/workspace/cloud-garden'],
+  ['DEMO-0003', 'Retro synth keyboard firmware', 'shipped', 'https://example.com/demo/retro-synth', '/demo/workspace/retro-synth'],
+  ['DEMO-0004', 'Pocket weather balloon kit', 'killed', null, null],
 ];
-for (const [id, summary, stage, repo] of projects) {
+for (const [id, summary, stage, repo, localPath] of projects) {
   db.run(
-    'INSERT INTO projects (project_id, idea_summary, created_at, current_stage, updated_at, repo_url) VALUES (?,?,?,?,?,?)',
-    [id, summary, '2026-01-02 09:00:00', stage, '2026-01-09 16:30:00', repo]
+    'INSERT INTO projects (project_id, idea_summary, created_at, current_stage, updated_at, repo_url, local_path) VALUES (?,?,?,?,?,?,?)',
+    [id, summary, '2026-01-02 09:00:00', stage, '2026-01-09 16:30:00', repo, localPath]
   );
 }
 

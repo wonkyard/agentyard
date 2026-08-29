@@ -61,17 +61,43 @@
     }
   }
 
+  // Splice text into a textarea at the caret without submitting.
+  function insertAtCaret(input, text) {
+    const start = input.selectionStart == null ? input.value.length : input.selectionStart;
+    const end = input.selectionEnd == null ? input.value.length : input.selectionEnd;
+    input.value = input.value.slice(0, start) + text + input.value.slice(end);
+    const caret = start + text.length;
+    try { input.setSelectionRange(caret, caret); } catch (e) { /* ignore */ }
+    input.dispatchEvent(new root.Event('input'));
+  }
+
+  function sendImageFile(adapter, file) {
+    if (!file || !adapter.attachImage) return;
+    const reader = new root.FileReader();
+    reader.onload = () => {
+      const buf = reader.result;
+      if (!buf) return;
+      const bytes = new Uint8Array(buf);
+      let bin = '';
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      adapter.attachImage(root.btoa(bin), file.type || 'image/png');
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
   function init() {
     const feed = document.getElementById('run-feed');
     const input = document.getElementById('run-input');
     const sendBtn = document.getElementById('run-send');
     const cancelBtn = document.getElementById('run-cancel');
     const newBtn = document.getElementById('run-new');
+    const attachBtn = document.getElementById('run-attach');
     const meta = document.getElementById('run-meta');
     const hint = document.getElementById('run-hint');
     if (!feed || !input) return;
 
     const adapter = AY.adapter || {};
+    const clip = AY.termclip || {};
     const supported = adapter.runSupported !== false;
     let running = false;
     let threadActive = false; // becomes true after a completed run -> next send resumes
@@ -194,6 +220,41 @@
           break;
       }
     }
+
+    // ---- attachments: 📎 button, image paste, drag & drop -----------
+    if (attachBtn && adapter.attachPick) {
+      attachBtn.addEventListener('click', () => adapter.attachPick());
+    }
+    if (adapter.onAttach) {
+      adapter.onAttach((msg) => {
+        if (msg && msg.event === 'insert' && msg.text) {
+          insertAtCaret(input, (input.value && !/\s$/.test(input.value) ? ' ' : '') + msg.text + ' ');
+        }
+      });
+    }
+    input.addEventListener('paste', (e) => {
+      const img = clip.firstImageFile && clip.firstImageFile(e.clipboardData);
+      if (img) {
+        e.preventDefault();
+        sendImageFile(adapter, img);
+      }
+    });
+    input.addEventListener('dragover', (e) => { e.preventDefault(); });
+    input.addEventListener('drop', (e) => {
+      const dt = e.dataTransfer;
+      if (!dt || !dt.files || !dt.files.length) return;
+      e.preventDefault();
+      const paths = [];
+      for (let i = 0; i < dt.files.length; i++) {
+        if (dt.files[i].path) paths.push(dt.files[i].path);
+      }
+      if (paths.length) {
+        if (adapter.attachPaths) adapter.attachPaths(paths);
+        return;
+      }
+      const img = clip.firstImageFile && clip.firstImageFile(dt);
+      if (img) sendImageFile(adapter, img);
+    });
 
     if (adapter.onRun) adapter.onRun(handle);
     setRunning(false);
