@@ -61,6 +61,19 @@ is resolved to a real executable and spawned with no shell — `cmd.exe` is neve
 invoked (see *How it's built*). Nothing about the session is written to disk by
 Agentyard.
 
+## First run
+
+The first time you open the panel, a short 3-step guide checks that the Claude
+Code CLI is found, offers to create starter departments (`research`,
+`engineering`, `growth`, a blank `_template`) in `~/.claude/agents/`, and points
+you at the header **?**. It runs once — reopen it any time with **Agentyard:
+Setup Guide**. If a room's terminal can't start `claude`, the notice now carries
+buttons to open the `agentyard.claudePath` setting, run **Agentyard:
+Diagnostics**, or open the in-app Help. Agentyard also augments `PATH` with the
+usual install locations a GUI-launched editor misses and runs a `#!node` `claude`
+script under VS Code's bundled Node, so `posix_spawnp` / `ENOENT` failures are
+much rarer.
+
 ## The panel tab
 
 Install the extension and an **Agentyard** tab appears in the bottom panel, next
@@ -197,9 +210,13 @@ webview/
   js/run.js             the headless Run view: feed rendering + send/cancel/new-thread
   js/term.js            the terminal Run view: xterm.js surface <-> pty wiring
   js/termclip.js        pure copy/paste key handler + image-blob helper (tested)
+  js/onboard.js         first-run wizard + in-webview Help view + empty-state banner
   js/main.js            poll loop, render loop, click + info panel, view toggle
   vendor/               vendored sql.js + xterm.js (MIT, see *-LICENSE files)
+media/starter-agents/   bundled starter department .md files (copied to ~/.claude/agents)
+media/help/             bundled Help markdown, rendered offline in the panel
 shared/claudeArgs.js    builds the claude argv — headless (`-p`) and interactive (pure, tested)
+shared/claudeResolve.js PATH augmentation + node-shebang rewrite + friendly spawn errors (pure, tested)
 shared/winWrap.js       resolves a Windows .cmd/.bat CLI shim to the real exe (no cmd.exe)
 shared/streamJson.js    parses the stream-json NDJSON into feed items (pure)
 shared/killTree.js      kills the run's / terminal's whole process tree

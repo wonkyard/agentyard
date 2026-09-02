@@ -18,6 +18,7 @@ const { toDepartments } = require('../shared/frontmatter.js');
 const hooksConfig = require('../shared/hooksConfig.js');
 const { buildClaudeArgs, buildInteractiveClaudeArgs, candidateCommands } = require('../shared/claudeArgs.js');
 const { needsCmdWrap, parseCmdShim, tokenizeCmdLine, resolveLauncher } = require('../shared/winWrap.js');
+const claudeResolve = require('../shared/claudeResolve.js');
 const { StreamJsonParser } = require('../shared/streamJson.js');
 const { killTree, isAlive } = require('../shared/killTree.js');
 const initSqlJs = require('sql.js');
@@ -185,7 +186,7 @@ check('run-view config props declared',
   !!cfgProps['agentyard.claudePermissionMode']);
 check('claudePermissionMode default is not a skip-permissions mode',
   cfgProps['agentyard.claudePermissionMode'].default === 'default');
-check('package version is 1.0.1', pkg.version === '1.0.1', pkg.version);
+check('package version is 1.0.2', pkg.version === '1.0.2', pkg.version);
 
 // --- 5b. v0.5 terminal: manifest wiring ---------------------------------
 check('runView config prop: enum terminal|headless, default terminal',
@@ -806,7 +807,7 @@ check('retainContextWhenHidden set',
 
 // --- 16. v1.0.0: manifest + extension wiring for clipboard/attach ----
 {
-  check('manifest: version is exactly 1.0.1', pkg.version === '1.0.1');
+  check('manifest: version is exactly 1.0.2', pkg.version === '1.0.2');
   check('manifest: keywords include "claude code" and "terminal"',
     Array.isArray(pkg.keywords) && pkg.keywords.includes('claude code') && pkg.keywords.includes('terminal'));
   check('manifest: galleryBanner is set (dark, #1e1e2e)',
@@ -1179,6 +1180,136 @@ check('retainContextWhenHidden set',
     cg5.building === true && cg5.buildPhase === 'project-eng' &&
     engSeat && engSeat.status === 'working' && others5.every((m) => m.status === 'idle'),
     JSON.stringify(cg5.team.map((m) => m.name + ':' + m.status)));
+}
+
+// --- 22. v1.0.2: `claude` exec robustness + first-run onboarding -------
+{
+  // -- PATH augmentation: pure, order-preserving, existence-filtered --------
+  const HOME = process.platform === 'win32' ? 'C:\\Users\\dev' : '/home/dev';
+  const dirsAll = claudeResolve.commonBinDirs(HOME, 'linux');
+  check('claudeResolve: common bin dirs are absolute + include the usual suspects',
+    dirsAll.length >= 6 && dirsAll.every((d) => path.isAbsolute(d)) &&
+    dirsAll.includes('/opt/homebrew/bin') && dirsAll.includes('/usr/local/bin') &&
+    dirsAll.some((d) => /\.local[/\\]bin$/.test(d)) && dirsAll.some((d) => /\.bun[/\\]bin$/.test(d)));
+
+  const existsSome = (p) => p === '/opt/homebrew/bin' || p === '/usr/local/bin';
+  const aug = claudeResolve.augmentPath('/usr/bin:/bin', HOME, 'linux', existsSome);
+  check('claudeResolve.augmentPath: appends only existing, not-already-present dirs',
+    aug.value === '/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin' &&
+    aug.added.join(',') === '/opt/homebrew/bin,/usr/local/bin');
+  check('claudeResolve.augmentPath: an already-present dir is not duplicated',
+    claudeResolve.augmentPath('/opt/homebrew/bin', HOME, 'linux', (p) => p === '/opt/homebrew/bin')
+      .added.length === 0);
+  check('claudeResolve.augmentPath: nothing to add -> PATH unchanged',
+    claudeResolve.augmentPath('/usr/bin', HOME, 'linux', () => false).value === '/usr/bin');
+  check('claudeResolve.searchDirs: process PATH entries come first, extras after',
+    (() => {
+      const d = claudeResolve.searchDirs({ PATH: '/usr/bin:/bin' }, HOME, 'linux', existsSome);
+      return d[0] === '/usr/bin' && d[1] === '/bin' && d.includes('/opt/homebrew/bin');
+    })());
+
+  // -- node shebang detection + rewrite -----------------------------------
+  check('claudeResolve.isNodeShebang: true for #!/usr/bin/env node scripts',
+    claudeResolve.isNodeShebang('#!/usr/bin/env node\nconsole.log(1)') &&
+    claudeResolve.isNodeShebang('#!/usr/local/bin/node') &&
+    claudeResolve.isNodeShebang('#!/usr/bin/env -S node --enable-source-maps'));
+  check('claudeResolve.isNodeShebang: false for a binary / non-node shebang',
+    !claudeResolve.isNodeShebang('\x7fELF\x02\x01\x01') &&
+    !claudeResolve.isNodeShebang('#!/bin/bash') &&
+    !claudeResolve.isNodeShebang('#!/usr/bin/env python3'));
+
+  const scriptTarget = { file: '/home/dev/.npm-global/bin/claude', args: ['--verbose'] };
+  const rewritten = claudeResolve.nodeShebangTarget(scriptTarget, {
+    readHead: () => '#!/usr/bin/env node\n',
+    execPath: '/opt/vscode/node',
+    platform: 'linux',
+  });
+  check('claudeResolve.nodeShebangTarget: a node script is run under the given execPath',
+    rewritten.file === '/opt/vscode/node' &&
+    JSON.stringify(rewritten.args) === JSON.stringify(['--', '/home/dev/.npm-global/bin/claude', '--verbose']) &&
+    rewritten.env && rewritten.env.ELECTRON_RUN_AS_NODE === '1');
+  check('claudeResolve.nodeShebangTarget: a real binary is returned unchanged',
+    claudeResolve.nodeShebangTarget(scriptTarget, {
+      readHead: () => '\x7fELF', execPath: '/opt/vscode/node', platform: 'linux',
+    }) === scriptTarget);
+  check('claudeResolve.nodeShebangTarget: no-op on win32 (shebang is a POSIX concern)',
+    claudeResolve.nodeShebangTarget(scriptTarget, {
+      readHead: () => '#!/usr/bin/env node', execPath: 'C:/vscode/node.exe', platform: 'win32',
+    }) === scriptTarget);
+
+  // -- friendly spawn message replaces the raw posix_spawnp string --------
+  const fm = claudeResolve.friendlySpawnMessage({ message: 'posix_spawnp failed.' }, 'claude', 'darwin');
+  check('claudeResolve.friendlySpawnMessage: actionable, names claudePath + which, keeps raw',
+    /agentyard\.claudePath/.test(fm) && /which claude/.test(fm) && /posix_spawnp failed/.test(fm));
+  check('claudeResolve.isExecFailure: catches ENOENT / EACCES / posix_spawn',
+    claudeResolve.isExecFailure({ code: 'ENOENT' }) &&
+    claudeResolve.isExecFailure({ code: 'EACCES' }) &&
+    claudeResolve.isExecFailure({ message: 'posix_spawnp failed.' }) &&
+    !claudeResolve.isExecFailure({ code: 'ETIMEDOUT' }));
+
+  // -- extension.js wiring ----------------------------------------------
+  const extSrc = fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8');
+  check('extension: whichSync searches the augmented dirs (claudeResolve.searchDirs)',
+    /claudeResolve\.searchDirs\(/.test(extSrc));
+  check('extension: both spawn sites use the augmented env + node-shebang rewrite',
+    /withNodeShebang\(/.test(extSrc) &&
+    (extSrc.match(/augmentedEnv\(\)\.env/g) || []).length >= 2 &&
+    /nodePty\.spawn\(target\.file, target\.args, \{[\s\S]{0,120}env,/.test(extSrc));
+  check('extension: the terminal spawn catch posts the friendly message, not the raw one',
+    /_failSpawn\(claudeResolve\.friendlySpawnMessage\(/.test(extSrc) &&
+    !/could not start the terminal: ' \+ e\.message/.test(extSrc));
+  check('extension: Diagnostics writes to an Output channel',
+    /createOutputChannel\('Agentyard'\)/.test(extSrc) && /function buildDiagnostics\(/.test(extSrc));
+  check('extension: starter-agent creation is non-destructive (skips existing)',
+    /function createStarterAgents\(/.test(extSrc) &&
+    /fs\.existsSync\(dst\)\)\s*\{\s*results\.push\(\{ name, state: 'exists'/.test(extSrc));
+  check('extension: onboarding gated on globalState agentyard.onboarded, not re-prompted',
+    /ONBOARDED_KEY = 'agentyard\.onboarded'/.test(extSrc) &&
+    /globalState\.get\(ONBOARDED_KEY\)/.test(extSrc));
+
+  // -- manifest: new commands, no new settings --------------------------
+  const cmds22 = ((pkg.contributes || {}).commands || []).map((c) => c.command);
+  for (const c of ['agentyard.setupGuide', 'agentyard.diagnostics', 'agentyard.createAgentFile']) {
+    check('manifest: command ' + c + ' declared', cmds22.includes(c));
+  }
+  const props22 = Object.keys((((pkg.contributes || {}).configuration || {}).properties) || {});
+  check('manifest: v1.0.2 adds no new settings key',
+    props22.length === 16 && !props22.some((k) => /onboard/i.test(k)), props22.length + ' keys');
+
+  // -- bundled first-run content --------------------------------------
+  const starterDir = path.join(EXT_ROOT, 'media', 'starter-agents');
+  const starterFiles = fs.readdirSync(starterDir).filter((f) => f.endsWith('.md'));
+  check('starter-agents: research / engineering / growth / _template bundled',
+    ['research.md', 'engineering.md', 'growth.md', '_template.md'].every((f) => starterFiles.includes(f)));
+  const starterDepts = toDepartments(
+    starterFiles.map((f) => ({ file: f, text: fs.readFileSync(path.join(starterDir, f), 'utf8') })));
+  check('starter-agents: every one parses with a name + model',
+    starterDepts.length === starterFiles.length &&
+    starterDepts.every((d) => d.name && d.model && d.model !== 'unknown'));
+
+  const helpDir = path.join(EXT_ROOT, 'media', 'help');
+  const helpFiles = fs.readdirSync(helpDir).filter((f) => f.endsWith('.md')).sort();
+  check('help: at least 5 bundled topics, each with an H1 title',
+    helpFiles.length >= 5 &&
+    helpFiles.every((f) => /^#\s+\S/m.test(fs.readFileSync(path.join(helpDir, f), 'utf8'))));
+  check('help: a terminal-troubleshooting topic exists',
+    helpFiles.some((f) => /terminal/.test(f)));
+
+  // -- .vscodeignore ships media/, drops nothing sensitive -------------
+  const vsig = fs.readFileSync(path.join(EXT_ROOT, '.vscodeignore'), 'utf8');
+  check('.vscodeignore: does not exclude media/ wholesale',
+    !/^media\/\*\*\s*$/m.test(vsig) && !/^media\/starter-agents/m.test(vsig));
+
+  // -- webview: onboard module + "?" affordance -----------------------
+  const onbSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'onboard.js'), 'utf8');
+  check('webview: onboard.js defines AY.onboard with init + onData',
+    /AY\.onboard = \{ init, onData/.test(onbSrc));
+  const idxHtml22 = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'index.html'), 'utf8');
+  check('webview: index.html has the always-on "?" help button + overlay + onboard.js',
+    /id="help-btn"/.test(idxHtml22) && /id="ay-overlay"/.test(idxHtml22) &&
+    /js\/onboard\.js/.test(idxHtml22));
+  check('extension: getHtml wires the "?" button, overlay and onboard.js too',
+    /id="help-btn"/.test(extSrc) && /id="ay-overlay"/.test(extSrc) && /'js\/onboard\.js'/.test(extSrc));
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

@@ -2,6 +2,42 @@
 
 All notable changes to Agentyard are recorded here.
 
+## 1.0.2
+
+First-run experience and `claude` launch robustness — driven by an external
+install that hit `could not start the terminal: posix_spawnp failed.` with no
+guidance.
+
+- **`claude` is found and run from a GUI-launched editor.** Before looking it
+  up, Agentyard now augments PATH with the install locations a Finder/Dock/Start
+  -menu launch misses (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`,
+  npm-global, bun / deno / volta / asdf, Windows npm-roaming) — the existing PATH
+  still wins. If the resolved `claude` is a `#!/usr/bin/env node` script it is run
+  under VS Code's own bundled Node (`ELECTRON_RUN_AS_NODE`), so a missing `node`
+  on PATH no longer breaks it. Applies to both the embedded terminal and the
+  headless runner.
+- **Actionable failure message.** On `EACCES` / `ENOENT` / `posix_spawn`, the
+  Run view now shows a Korean-first "`claude` 를 실행하지 못했어요" notice with
+  buttons — open the `agentyard.claudePath` setting, run Diagnostics, open Help —
+  instead of the raw error string.
+- **Empty roster guidance.** A workspace with no department `.md` files shows an
+  in-panel empty-state card; demo data shows a "데모 데이터예요" badge. Both offer
+  **샘플 부서 만들기** / **자세히**.
+- **First-run onboarding.** A 3-step in-panel wizard (Claude Code check →
+  create starter departments → done) opens once on the first panel view, gated on
+  `globalState`, and never re-prompts. Re-open it any time with the new
+  **Agentyard: Setup Guide** command.
+- **Always-on Help.** A circular **?** in the panel header opens an in-webview
+  Help view rendering bundled markdown — what Agentyard is, making departments,
+  every setting, terminal troubleshooting, data modes, links. Works offline.
+- **New commands:** `Agentyard: Setup Guide`, `Agentyard: Diagnostics` (platform,
+  resolved `claude` path + augmentation/shebang, `node-pty` state, data mode,
+  roster counts, settings — to an Output channel), `Agentyard: New Department
+  (Agent) File` (pick a bundled starter, created non-destructively in
+  `~/.claude/agents/`, then opened).
+- Bundled starter agents (`research`, `engineering`, `growth`, a commented
+  `_template`) and help pages ship in the `.vsix`. No new settings.
+
 ## 1.0.1
 
 - Office view: a company.db `working` status older than `agentyard.staleWorkingHours`
