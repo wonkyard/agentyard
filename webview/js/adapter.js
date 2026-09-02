@@ -34,6 +34,12 @@
       attachPick() {},
       attachPaths() {},
       attachImage() {},
+      // First-run wizard / help are extension-host features (globalState,
+      // bundled markdown, ~/.claude writes). The browser dev server has none of
+      // that, so the "?" button and empty-state just show a short static note.
+      onboardSupported: false,
+      sendMsg() {},
+      onMsg() {},
       async runSample() {
         try {
           const res = await fetch('api/run-sample', { cache: 'no-store' });
@@ -80,6 +86,7 @@
     const termListeners = [];
     const clipListeners = [];
     const attachListeners = [];
+    const msgListeners = []; // onboard / help / ui replies
 
     root.addEventListener('message', (ev) => {
       const msg = ev.data || {};
@@ -103,6 +110,12 @@
       }
       if (msg.type === 'attach') {
         attachListeners.forEach((fn) => {
+          try { fn(msg); } catch (e) { /* ignore */ }
+        });
+        return;
+      }
+      if (msg.type === 'onboard' || msg.type === 'help' || msg.type === 'ui') {
+        msgListeners.forEach((fn) => {
           try { fn(msg); } catch (e) { /* ignore */ }
         });
         return;
@@ -153,6 +166,13 @@
       },
       termNew() {
         vscode.postMessage({ type: 'term', event: 'new' });
+      },
+      onboardSupported: true,
+      sendMsg(msg) {
+        if (msg && typeof msg === 'object') vscode.postMessage(msg);
+      },
+      onMsg(fn) {
+        if (typeof fn === 'function') msgListeners.push(fn);
       },
       onClip(fn) {
         if (typeof fn === 'function') clipListeners.push(fn);

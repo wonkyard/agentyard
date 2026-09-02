@@ -56,6 +56,9 @@
   if (AY.term && AY.term.init) {
     try { AY.term.init(); } catch (e) { /* terminal view is optional */ }
   }
+  if (AY.onboard && AY.onboard.init) {
+    try { AY.onboard.init(); } catch (e) { /* onboarding is optional */ }
+  }
 
   // Supersample: render the scene at SS× the logical size and let the browser
   // scale the canvas element down to the panel width. This is what keeps small
@@ -157,6 +160,7 @@
       const dbResult = await AY.db.read(raw.dbBytes, AY.adapter.wasmUrl);
       office = AY.model.build(raw, dbResult);
       lastError = null;
+      if (AY.onboard && AY.onboard.onData) AY.onboard.onData(raw);
       const dataTag = office.dataMode === 'demo' ? 'SYNTHETIC demo data' : 'workspace data';
       const liveTag = office.liveMode === 'off' ? 'hooks off'
         : `${office.liveMode} · ${office.liveSessionCount} session(s), ${office.liveAgentCount} live agent(s)`;

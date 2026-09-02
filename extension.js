@@ -9,6 +9,7 @@ const { toDepartments } = require('./shared/frontmatter.js');
 const hooksConfig = require('./shared/hooksConfig.js');
 const { buildClaudeArgs, buildInteractiveClaudeArgs, candidateCommands } = require('./shared/claudeArgs.js');
 const { needsCmdWrap, resolveLauncher } = require('./shared/winWrap.js');
+const claudeResolve = require('./shared/claudeResolve.js');
 const { StreamJsonParser } = require('./shared/streamJson.js');
 const { killTree, spawnGroupOpts } = require('./shared/killTree.js');
 const attach = require('./shared/attach.js');
@@ -75,6 +76,59 @@ function installHook() {
   }
 }
 
+// Bundled first-run content (shipped in the .vsix — see .vscodeignore).
+const STARTER_AGENTS_DIR = path.join(__dirname, 'media', 'starter-agents');
+const HELP_DIR = path.join(__dirname, 'media', 'help');
+const USER_AGENTS_DIR = path.join(os.homedir(), '.claude', 'agents');
+
+// globalState keys for the first-run wizard. `onboarded` gates the auto-open;
+// `onboardedVersion` records the version it was completed on (room for a future
+// one-time re-notice on a major change — off by default).
+const ONBOARDED_KEY = 'agentyard.onboarded';
+const ONBOARDED_VERSION_KEY = 'agentyard.onboardedVersion';
+
+// PATH augmentation for a GUI-launched editor is computed once (an existence
+// scan of ~12 dirs) and reused for every spawn. See shared/claudeResolve.js.
+let _augmentedEnv = null;
+function augmentedEnv() {
+  if (_augmentedEnv) return _augmentedEnv;
+  const cur = process.env.PATH || process.env.Path || '';
+  const { value, added } = claudeResolve.augmentPath(
+    cur, os.homedir(), process.platform, (p) => { try { return fs.existsSync(p); } catch (e) { return false; } }
+  );
+  const env = { ...process.env };
+  if (process.platform === 'win32') env.Path = value;
+  env.PATH = value;
+  _augmentedEnv = { env, added };
+  return _augmentedEnv;
+}
+
+// First line / first ~256 bytes of a file, for shebang detection — never reads
+// a whole binary.
+function readHead(p) {
+  try {
+    const fd = fs.openSync(p, 'r');
+    const buf = Buffer.alloc(256);
+    const n = fs.readSync(fd, buf, 0, 256, 0);
+    fs.closeSync(fd);
+    return buf.toString('utf8', 0, n);
+  } catch (e) {
+    return '';
+  }
+}
+
+// Rewrite a resolved { file, args } claude target to run under VS Code's bundled
+// Node when it is a `#!…node` script (removes the separate-`node`-on-PATH
+// dependency that causes posix_spawnp failures). No-op for a real binary / Windows.
+function withNodeShebang(target) {
+  if (!target) return target;
+  return claudeResolve.nodeShebangTarget(target, {
+    readHead,
+    execPath: process.execPath,
+    platform: process.platform,
+  });
+}
+
 const DEMO = {
   db: path.join(__dirname, 'dev-data', 'demo.db'),
   depts: path.join(__dirname, 'dev-data', 'agents'),
@@ -124,7 +178,12 @@ function whichSync(name) {
   if (path.isAbsolute(name) || /[\\/]/.test(name)) {
     try { return fs.statSync(name).isFile() ? name : null; } catch (e) { return null; }
   }
-  const dirs = String(process.env.PATH || process.env.Path || '').split(path.delimiter);
+  // Process PATH first (unchanged behaviour when claude is already resolvable),
+  // then the common GUI-missed install dirs from shared/claudeResolve.js.
+  const dirs = claudeResolve.searchDirs(
+    process.env, os.homedir(), process.platform,
+    (p) => { try { return fs.existsSync(p); } catch (e) { return false; } }
+  );
   for (const d of dirs) {
     if (!d) continue;
     const p = path.join(d, name);
@@ -546,16 +605,20 @@ class RunController {
   _spawn(candidates, i, args, cwd) {
     if (i >= candidates.length) {
       this._fail(
-        'Could not launch "' + candidates[0] + '". Set agentyard.claudePath to the Claude ' +
-        'Code CLI — on Windows point it at claude.exe or a full path to the real executable, ' +
-        'not a .cmd/.bat shim.'
+        claudeResolve.friendlySpawnMessage(
+          { message: 'not found on PATH' },
+          candidates[0],
+          process.platform
+        )
       );
       return;
     }
     const command = candidates[i];
     let file = command;
     let spawnArgs = args;
-    const opts = { cwd, env: process.env, windowsHide: true, ...spawnGroupOpts(process.platform) };
+    // Augmented PATH so a GUI-launched editor can still find `claude` and its
+    // `node` interpreter (see shared/claudeResolve.js).
+    const opts = { cwd, env: { ...augmentedEnv().env }, windowsHide: true, ...spawnGroupOpts(process.platform) };
 
     if (needsCmdWrap(command, process.platform)) {
       // There is no safe way to pass a prompt through cmd.exe, so we never do.
@@ -569,13 +632,24 @@ class RunController {
       }
       file = resolved.file;
       spawnArgs = resolved.prefixArgs.concat(args);
+    } else {
+      // Resolve to a concrete path so a `#!…node` script can be run under the
+      // editor's bundled Node instead of relying on `node` being on PATH.
+      const resolved = whichSync(command);
+      if (resolved) {
+        const tgt = withNodeShebang({ file: resolved, args: spawnArgs.slice() });
+        file = tgt.file;
+        spawnArgs = tgt.args;
+        if (tgt.env) opts.env = { ...opts.env, ...tgt.env };
+      }
     }
 
     let child;
     try {
       child = cp.spawn(file, spawnArgs, opts);
     } catch (e) {
-      this._spawn(candidates, i + 1, args, cwd);
+      if (i + 1 < candidates.length) { this._spawn(candidates, i + 1, args, cwd); return; }
+      this._fail(claudeResolve.friendlySpawnMessage(e, candidates[0], process.platform));
       return;
     }
     this.child = child;
@@ -590,9 +664,13 @@ class RunController {
     let sawData = false;
     child.on('error', (err) => {
       if (this.child !== child) return;
-      if (!sawData && (err.code === 'ENOENT' || err.code === 'EINVAL')) {
+      if (!sawData && (err.code === 'ENOENT' || err.code === 'EINVAL') && i + 1 < candidates.length) {
         this.child = null;
         this._spawn(candidates, i + 1, args, cwd);
+        return;
+      }
+      if (!sawData && claudeResolve.isExecFailure(err)) {
+        this._fail(claudeResolve.friendlySpawnMessage(err, candidates[0], process.platform));
         return;
       }
       this._fail('claude process error: ' + err.message);
@@ -689,6 +767,14 @@ class TerminalRun {
     this.post({ type: 'term', event: 'data', data: text });
   }
 
+  // A resolve/spawn failure: print the friendly message in the terminal AND
+  // post an actionable notice so the panel can show [설정 열기] / [진단 실행] /
+  // [도움말] buttons (no browser dialog).
+  _failSpawn(message, raw) {
+    this._say('\r\n\x1b[31m' + String(message).replace(/\n/g, '\r\n') + '\x1b[0m\r\n');
+    this.post({ type: 'term', event: 'spawn-failed', message: String(message), raw: raw || null });
+  }
+
   // The webview's terminal has connected — first load, or after a reload.
   attach(cols, rows) {
     if (cols > 0 && rows > 0) { this.cols = cols; this.rows = rows; }
@@ -724,25 +810,29 @@ class TerminalRun {
       return;
     }
 
-    const target = resolvePtyClaude(built.command, built.args);
-    if (!target) {
-      this._say('\r\n\x1b[31mCould not launch "' + built.command + '". Set agentyard.claudePath ' +
-        'to the Claude Code CLI — on Windows point it at claude.exe or a full path to the real ' +
-        'executable, not a .cmd/.bat shim.\x1b[0m\r\n');
+    const resolved = resolvePtyClaude(built.command, built.args);
+    if (!resolved) {
+      this._failSpawn(claudeResolve.friendlySpawnMessage(
+        { message: 'not found on PATH' }, built.command, process.platform));
       return;
     }
+    // Run a `#!…node` claude script under VS Code's bundled Node so it doesn't
+    // depend on `node` being on the (minimal, GUI-inherited) PATH.
+    const target = withNodeShebang(resolved);
+    const env = { ...augmentedEnv().env };
+    if (target.env) Object.assign(env, target.env);
 
     let pty;
     try {
       pty = nodePty.spawn(target.file, target.args, {
         name: 'xterm-256color',
         cwd: root,
-        env: process.env,
+        env,
         cols: this.cols,
         rows: this.rows,
       });
     } catch (e) {
-      this._say('\r\n\x1b[31mcould not start the terminal: ' + e.message + '\x1b[0m\r\n');
+      this._failSpawn(claudeResolve.friendlySpawnMessage(e, built.command, process.platform), e.message);
       return;
     }
 
@@ -820,7 +910,7 @@ async function writeClipboardText(text) {
 }
 
 // ---- webview -------------------------------------------------------
-function getHtml(webview, extUri) {
+function getHtml(webview, extUri, context) {
   const n = nonce();
   const asset = (...seg) =>
     webview.asWebviewUri(vscode.Uri.joinPath(extUri, 'webview', ...seg)).toString();
@@ -844,9 +934,11 @@ function getHtml(webview, extUri) {
 
   const scripts = ['vendor/sql-wasm.js', 'vendor/xterm.js', 'vendor/xterm-addon-fit.js',
     'js/palette.js', 'js/sprites.js', 'js/db.js', 'js/adapter.js', 'js/live.js', 'js/model.js',
-    'js/render.js', 'js/termclip.js', 'js/run.js', 'js/term.js', 'js/main.js']
+    'js/render.js', 'js/termclip.js', 'js/run.js', 'js/term.js', 'js/onboard.js', 'js/main.js']
     .map((s) => `<script nonce="${n}" src="${asset(...s.split('/'))}"></script>`)
     .join('\n  ');
+
+  const onboarded = !!(context && context.globalState && context.globalState.get(ONBOARDED_KEY));
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -861,16 +953,19 @@ function getHtml(webview, extUri) {
   <div id="app">
     <header id="topbar">
       <span class="brand">AGENTYARD<span class="ver" id="brand-ver"></span></span>
+      <button type="button" id="help-btn" title="도움말 · 설정 안내" aria-label="도움말 열기">?</button>
       <span id="view-toggle">
         <button type="button" data-view="office" class="on">Office</button>
         <button type="button" data-view="run">Run</button>
       </span>
     </header>
     <div id="office-pane">
+      <div id="office-banner" hidden></div>
       <div id="stage-wrap"><canvas id="scene" width="840" height="600"></canvas></div>
       <aside id="panel"></aside>
       <div id="status">connecting…</div>
     </div>
+    <div id="ay-overlay" hidden><div id="ay-overlay-card" role="dialog" aria-modal="true"></div></div>
     <div id="run-pane" hidden>
       <div id="run-notice" hidden></div>
       <div id="run-term" hidden></div>
@@ -896,7 +991,7 @@ function getHtml(webview, extUri) {
     </div>
   </div>
   <script nonce="${n}">
-    window.AY_CONFIG = { mode: 'vscode', version: ${JSON.stringify(pkg.version)}, pollSeconds: ${JSON.stringify(cfg.get('pollSeconds', 3))}, wasmUrl: ${JSON.stringify(wasmUrl)}, runView: ${JSON.stringify(runView)}, runViewRequested: ${JSON.stringify(runViewRequested)}, ptyAvailable: ${JSON.stringify(ptyAvailable)}, platform: ${JSON.stringify(process.platform)}, terminalCopyPaste: ${JSON.stringify(cfg.get('terminalCopyPaste', true))}, copyOnSelection: ${JSON.stringify(cfg.get('copyOnSelection', false))} };
+    window.AY_CONFIG = { mode: 'vscode', version: ${JSON.stringify(pkg.version)}, pollSeconds: ${JSON.stringify(cfg.get('pollSeconds', 3))}, wasmUrl: ${JSON.stringify(wasmUrl)}, runView: ${JSON.stringify(runView)}, runViewRequested: ${JSON.stringify(runViewRequested)}, ptyAvailable: ${JSON.stringify(ptyAvailable)}, platform: ${JSON.stringify(process.platform)}, terminalCopyPaste: ${JSON.stringify(cfg.get('terminalCopyPaste', true))}, copyOnSelection: ${JSON.stringify(cfg.get('copyOnSelection', false))}, onboarded: ${JSON.stringify(onboarded)} };
   </script>
   ${scripts}
 </body>
@@ -912,10 +1007,11 @@ function collectSnapshot(live) {
   } catch (e) {
     return { type: 'data', error: 'cannot read ' + p.db + ': ' + e.message };
   }
+  const departments = p.dataMode === 'demo' ? readAgentDir(p.depts) : readRoster(p.depts);
   return {
     type: 'data',
     dataMode: p.dataMode,
-    departments: p.dataMode === 'demo' ? readAgentDir(p.depts) : readRoster(p.depts),
+    departments,
     teamRoles: readAgentDir(p.team),
     dbBase64,
     liveEvents: live ? live.recent() : [],
@@ -926,7 +1022,151 @@ function collectSnapshot(live) {
     maxSpritesPerRoom: cfg.get('maxSpritesPerRoom', 8),
     platform: process.platform, // §7: case-insensitive local_path match on win32
     nowMs: Date.now(),
+    // first-run guidance: is there a workspace, and does it have any departments?
+    hasWorkspace: !!workspaceRoot(),
+    rosterEmpty: p.dataMode === 'workspace' && departments.length === 0,
+    userRosterCount: readAgentDir(USER_AGENTS_DIR).length,
   };
+}
+
+// ---- first-run: starter agents, diagnostics -----------------------
+// Copy the picked bundled starter agents into ~/.claude/agents/. Non-destructive
+// — an existing file is left untouched and reported as such.
+function createStarterAgents(names) {
+  const want = Array.isArray(names) && names.length
+    ? names
+    : ['research', 'engineering', 'growth', '_template'];
+  const results = [];
+  try {
+    fs.mkdirSync(USER_AGENTS_DIR, { recursive: true });
+  } catch (e) {
+    return { dir: USER_AGENTS_DIR, error: e.message, results };
+  }
+  for (const raw of want) {
+    const name = String(raw).replace(/[^A-Za-z0-9_-]/g, '');
+    if (!name) continue;
+    const src = path.join(STARTER_AGENTS_DIR, name + '.md');
+    const dst = path.join(USER_AGENTS_DIR, name + '.md');
+    if (!fs.existsSync(src)) { results.push({ name, state: 'unknown' }); continue; }
+    if (fs.existsSync(dst)) { results.push({ name, state: 'exists', path: dst }); continue; }
+    try {
+      fs.copyFileSync(src, dst);
+      results.push({ name, state: 'created', path: dst });
+    } catch (e) {
+      results.push({ name, state: 'error', message: e.message });
+    }
+  }
+  return { dir: USER_AGENTS_DIR, results };
+}
+
+function listStarterAgents() {
+  let files = [];
+  try {
+    files = fs.readdirSync(STARTER_AGENTS_DIR).filter((f) => f.endsWith('.md'));
+  } catch (e) {
+    return [];
+  }
+  return files.map((f) => {
+    const name = f.replace(/\.md$/, '');
+    const { attrs } = require('./shared/frontmatter.js').parseFrontmatter(safeRead(path.join(STARTER_AGENTS_DIR, f)));
+    return {
+      name,
+      description: attrs.description || '',
+      model: attrs.model || 'sonnet',
+      exists: fs.existsSync(path.join(USER_AGENTS_DIR, f)),
+      template: name.charAt(0) === '_',
+    };
+  });
+}
+
+// Read the bundled help markdown files (media/help/NN-<id>.md) in name order.
+function helpTopics() {
+  let files = [];
+  try {
+    files = fs.readdirSync(HELP_DIR).filter((f) => f.endsWith('.md')).sort();
+  } catch (e) {
+    return [];
+  }
+  return files.map((f) => {
+    const text = safeRead(path.join(HELP_DIR, f));
+    const m = text.match(/^#\s+(.+)$/m);
+    return {
+      id: f.replace(/^\d+-/, '').replace(/\.md$/, ''),
+      title: m ? m[1].trim() : f,
+      markdown: text,
+    };
+  });
+}
+
+// Resolve the configured claude to a concrete target for the diagnostics report.
+function diagnoseClaude() {
+  const cfg = vscode.workspace.getConfiguration('agentyard');
+  const command = cfg.get('claudePath', 'claude');
+  const out = { command, resolved: null, shebang: null, viaAugment: false };
+  for (const cand of candidateCommands(command, process.platform)) {
+    if (needsCmdWrap(cand, process.platform)) {
+      const r = resolveWinLauncher(cand);
+      if (r) { out.resolved = r.file; break; }
+      continue;
+    }
+    const found = whichSync(cand);
+    if (found) {
+      out.resolved = found;
+      const head = readHead(found);
+      if (claudeResolve.isNodeShebang(head)) {
+        out.shebang = head.split('\n', 1)[0];
+      }
+      const pathDirs = String(process.env.PATH || process.env.Path || '').split(path.delimiter).map((d) => d.replace(/[\\/]+$/, ''));
+      out.viaAugment = !pathDirs.includes(path.dirname(found).replace(/[\\/]+$/, ''));
+      break;
+    }
+  }
+  return out;
+}
+
+function buildDiagnostics() {
+  const cfg = vscode.workspace.getConfiguration('agentyard');
+  const p = paths();
+  const cl = diagnoseClaude();
+  const aug = augmentedEnv();
+  const L = [];
+  L.push('Agentyard Diagnostics — ' + new Date().toISOString());
+  L.push('');
+  L.push('platform          : ' + process.platform + ' ' + process.arch);
+  L.push('VS Code           : ' + vscode.version);
+  L.push('extension         : agentyard ' + pkg.version);
+  L.push('node (execPath)    : ' + process.execPath);
+  L.push('');
+  L.push('claude (configured): ' + cl.command);
+  L.push('claude (resolved)  : ' + (cl.resolved || 'NOT FOUND on PATH or common install dirs'));
+  if (cl.resolved) {
+    L.push('  via PATH augment : ' + (cl.viaAugment ? 'yes' : 'no'));
+    L.push('  shebang script   : ' + (cl.shebang ? cl.shebang + '  → run under VS Code Node' : 'no (native binary)'));
+  }
+  L.push('PATH dirs added    : ' + (aug.added.length ? aug.added.join(', ') : '(none — PATH already had them or they do not exist)'));
+  L.push('');
+  L.push('node-pty          : ' + (nodePty ? 'loaded' : 'NOT loaded — ' + (nodePtyError || 'unknown') + ' (Run view falls back to headless)'));
+  L.push('data mode         : ' + p.dataMode);
+  L.push('  db              : ' + p.db + (fs.existsSync(p.db) ? ' (exists)' : ' (missing)'));
+  L.push('  agents dir      : ' + p.depts + (fs.existsSync(p.depts) ? '' : ' (missing)'));
+  L.push('user roster       : ' + USER_AGENTS_DIR + ' — ' + readAgentDir(USER_AGENTS_DIR).length + ' file(s)');
+  L.push('workspace roster  : ' + (workspaceRoot()
+    ? (p.dataMode === 'workspace' ? readAgentDir(p.depts).length + ' file(s)' : 'n/a (demo mode)')
+    : 'no workspace folder open'));
+  L.push('');
+  L.push('settings');
+  for (const k of ['claudePath', 'claudePermissionMode', 'runView', 'pollSeconds', 'dbPath', 'agentsGlob', 'staleWorkingHours']) {
+    L.push('  agentyard.' + k + ' = ' + JSON.stringify(cfg.get(k)));
+  }
+  return L.join('\n');
+}
+
+let _diagChannel = null;
+function showDiagnostics() {
+  if (!_diagChannel) _diagChannel = vscode.window.createOutputChannel('Agentyard');
+  _diagChannel.clear();
+  _diagChannel.appendLine(buildDiagnostics());
+  _diagChannel.show(true);
 }
 
 class OfficeViewProvider {
@@ -1024,6 +1264,88 @@ class OfficeViewProvider {
     attach.clearAttachmentsDir(root, cfg.get('attachmentsDir', attach.DEFAULT_ATTACHMENTS_DIR));
   }
 
+  // ---- first-run wizard + help bridge -----------------------------
+  // The webview owns the wizard/help UI (in-panel views, no browser dialog);
+  // the host answers with globalState, bundled content, and filesystem writes.
+  handleOnboard(msg) {
+    const gs = this.context.globalState;
+    if (msg.action === 'get') {
+      this.post({
+        type: 'onboard', event: 'state',
+        onboarded: !!gs.get(ONBOARDED_KEY),
+        hasWorkspace: !!workspaceRoot(),
+        claude: diagnoseClaude(),
+        starters: listStarterAgents(),
+        userAgentsDir: USER_AGENTS_DIR,
+      });
+      return;
+    }
+    if (msg.action === 'done') {
+      gs.update(ONBOARDED_KEY, true);
+      gs.update(ONBOARDED_VERSION_KEY, pkg.version);
+      this.post({ type: 'onboard', event: 'state', onboarded: true });
+      return;
+    }
+    if (msg.action === 'reset') { // internal / test affordance, not surfaced in UI
+      gs.update(ONBOARDED_KEY, false);
+      return;
+    }
+    if (msg.action === 'detectClaude') {
+      this.post({ type: 'onboard', event: 'claude', claude: diagnoseClaude() });
+      return;
+    }
+    if (msg.action === 'setClaudePath') {
+      const v = String(msg.path || '').trim();
+      vscode.workspace.getConfiguration('agentyard')
+        .update('claudePath', v || undefined, vscode.ConfigurationTarget.Global)
+        .then(() => this.post({ type: 'onboard', event: 'claude', claude: diagnoseClaude() }));
+      return;
+    }
+    if (msg.action === 'createAgents') {
+      const res = createStarterAgents(msg.names);
+      this.post({ type: 'onboard', event: 'created', result: res, starters: listStarterAgents() });
+      this.pushData();
+      return;
+    }
+    if (msg.action === 'openAgent') {
+      const name = String(msg.name || '').replace(/[^A-Za-z0-9_-]/g, '');
+      if (name) vscode.commands.executeCommand('vscode.open', vscode.Uri.file(path.join(USER_AGENTS_DIR, name + '.md')));
+      return;
+    }
+    if (msg.action === 'openAgentsFolder') {
+      try { fs.mkdirSync(USER_AGENTS_DIR, { recursive: true }); } catch (e) { /* ignore */ }
+      vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(USER_AGENTS_DIR));
+    }
+  }
+
+  handleHelp(msg) {
+    if (msg.action === 'list' || msg.action === 'get') {
+      this.post({ type: 'help', event: 'topics', topics: helpTopics() });
+    }
+  }
+
+  // `Agentyard: Setup Guide` — open the wizard even if it's the first time the
+  // panel is being shown (the webview may still be resolving).
+  openSetupGuide() {
+    vscode.commands.executeCommand('agentyard.office.focus');
+    if (this.view) this.post({ type: 'onboard', event: 'open', force: true });
+    else this._pendingOnboardOpen = true;
+  }
+
+  handleUi(msg) {
+    if (msg.action === 'openClaudePathSetting') {
+      vscode.commands.executeCommand('workbench.action.openSettings', 'agentyard.claudePath');
+    } else if (msg.action === 'diagnostics') {
+      showDiagnostics();
+    } else if (msg.action === 'openClaudeTerminal') {
+      openClaudeTerminal();
+    } else if (msg.action === 'openExternal' && msg.url) {
+      try { vscode.env.openExternal(vscode.Uri.parse(String(msg.url))); } catch (e) { /* ignore */ }
+    } else if (msg.action === 'liveMode') {
+      vscode.commands.executeCommand('agentyard.enableLiveMode');
+    }
+  }
+
   stop() {
     this.watchers.forEach((w) => w.dispose());
     this.watchers = [];
@@ -1070,7 +1392,7 @@ class OfficeViewProvider {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'webview')],
     };
-    webviewView.webview.html = getHtml(webviewView.webview, this.context.extensionUri);
+    webviewView.webview.html = getHtml(webviewView.webview, this.context.extensionUri, this.context);
 
     webviewView.webview.onDidReceiveMessage((msg) => {
       if (!msg) return;
@@ -1094,6 +1416,9 @@ class OfficeViewProvider {
       }
       if (msg.type === 'clip') this.handleClip(msg);
       if (msg.type === 'attach') this.handleAttach(msg);
+      if (msg.type === 'onboard') this.handleOnboard(msg);
+      if (msg.type === 'help') this.handleHelp(msg);
+      if (msg.type === 'ui') this.handleUi(msg);
     });
 
     webviewView.onDidChangeVisibility(() => {
@@ -1112,6 +1437,10 @@ class OfficeViewProvider {
     this.clearAttachments();
     this.startWatchers();
     this.pushData();
+    if (this._pendingOnboardOpen) {
+      this._pendingOnboardOpen = false;
+      this.post({ type: 'onboard', event: 'open', force: true });
+    }
   }
 }
 
@@ -1148,9 +1477,36 @@ function activate(context) {
     vscode.commands.registerCommand('agentyard.disableLiveMode', () =>
       disableLiveMode().then(() => provider.pushData())
     ),
-    vscode.commands.registerCommand('agentyard.openClaudeTerminal', openClaudeTerminal)
+    vscode.commands.registerCommand('agentyard.openClaudeTerminal', openClaudeTerminal),
+    vscode.commands.registerCommand('agentyard.setupGuide', () => provider.openSetupGuide()),
+    vscode.commands.registerCommand('agentyard.diagnostics', showDiagnostics),
+    vscode.commands.registerCommand('agentyard.createAgentFile', () => createAgentFileCommand(provider))
   );
   context.subscriptions.push({ dispose: () => provider.dispose() });
+  context.subscriptions.push({ dispose: () => { if (_diagChannel) _diagChannel.dispose(); } });
+}
+
+// `Agentyard: New Department (Agent) File` — pick a bundled starter (or the blank
+// template), create it in ~/.claude/agents/ if it isn't there, and open it.
+async function createAgentFileCommand(provider) {
+  const starters = listStarterAgents();
+  const pick = await vscode.window.showQuickPick(
+    starters.map((s) => ({
+      label: s.name,
+      description: s.exists ? '이미 있음 — 열기' : (s.template ? '빈 템플릿' : s.model),
+      detail: s.description,
+      name: s.name,
+    })),
+    { placeHolder: '만들 부서(에이전트)를 고르세요 — ~/.claude/agents/ 에 생성됩니다' }
+  );
+  if (!pick) return;
+  const res = createStarterAgents([pick.name]);
+  const r = (res.results || [])[0];
+  const target = (r && r.path) || path.join(USER_AGENTS_DIR, pick.name + '.md');
+  if (r && r.state === 'created') vscode.window.showInformationMessage('부서 파일을 만들었어요: ' + target);
+  else if (r && r.state === 'exists') vscode.window.showInformationMessage('이미 있어서 그대로 엽니다: ' + target);
+  try { await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(target)); } catch (e) { /* ignore */ }
+  if (provider) provider.pushData();
 }
 
 function deactivate() {}

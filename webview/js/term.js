@@ -49,6 +49,30 @@
       noticeEl.hidden = !text;
     }
 
+    // A spawn failure: the friendly message + actionable buttons (no dialog).
+    function showSpawnFailure(message) {
+      if (!noticeEl) return;
+      noticeEl.textContent = '';
+      noticeEl.hidden = false;
+      const p = document.createElement('div');
+      p.textContent = message || 'claude 실행에 실패했어요.';
+      p.style.whiteSpace = 'pre-wrap';
+      noticeEl.appendChild(p);
+      const row = document.createElement('div');
+      row.className = 'run-notice-actions';
+      const mk = (label, fn) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = label;
+        b.addEventListener('click', fn);
+        row.appendChild(b);
+      };
+      mk('claudePath 설정 열기', () => adapter.sendMsg && adapter.sendMsg({ type: 'ui', action: 'openClaudePathSetting' }));
+      mk('진단 실행', () => adapter.sendMsg && adapter.sendMsg({ type: 'ui', action: 'diagnostics' }));
+      mk('도움말', () => { if (AY.onboard && AY.onboard.showHelp) AY.onboard.showHelp('terminal'); });
+      noticeEl.appendChild(row);
+    }
+
     // Not terminal mode: js/run.js owns the view. Still surface a one-line
     // notice if the user asked for a terminal but the native component is
     // missing on this platform (the extension already fell back to headless).
@@ -216,6 +240,8 @@
           '] — press New thread or start typing to run it again\x1b[0m\r\n');
       } else if (msg.event === 'unavailable') {
         showNotice(msg.message || '');
+      } else if (msg.event === 'spawn-failed') {
+        showSpawnFailure(msg.message || '');
       }
     });
 

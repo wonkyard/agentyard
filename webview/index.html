@@ -11,18 +11,21 @@
   <div id="app">
     <header id="topbar">
       <span class="brand">AGENTYARD<span class="ver" id="brand-ver"></span></span>
+      <button type="button" id="help-btn" title="도움말 · 설정 안내" aria-label="도움말 열기">?</button>
       <span id="view-toggle">
         <button type="button" data-view="office" class="on">Office</button>
         <button type="button" data-view="run">Run</button>
       </span>
     </header>
     <div id="office-pane">
+      <div id="office-banner" hidden></div>
       <div id="stage-wrap">
         <canvas id="scene" width="840" height="600"></canvas>
       </div>
       <aside id="panel"></aside>
       <div id="status">connecting…</div>
     </div>
+    <div id="ay-overlay" hidden><div id="ay-overlay-card" role="dialog" aria-modal="true"></div></div>
     <div id="run-pane" hidden>
       <div id="run-notice" hidden></div>
       <div id="run-term" hidden></div>
@@ -53,7 +56,7 @@
     // The embedded terminal needs the extension host (node-pty), so the browser
     // dev server always previews the headless feed.
     // scripts/dev-server.mjs replaces __AY_VERSION__ with package.json's version.
-    window.AY_CONFIG = window.AY_CONFIG || { mode: 'browser', version: '__AY_VERSION__', pollSeconds: 3, wasmUrl: 'vendor/sql-wasm.wasm', runView: 'headless', runViewRequested: 'headless', ptyAvailable: false, platform: 'browser', terminalCopyPaste: true, copyOnSelection: false };
+    window.AY_CONFIG = window.AY_CONFIG || { mode: 'browser', version: '__AY_VERSION__', pollSeconds: 3, wasmUrl: 'vendor/sql-wasm.wasm', runView: 'headless', runViewRequested: 'headless', ptyAvailable: false, platform: 'browser', terminalCopyPaste: true, copyOnSelection: false, onboarded: true };
     if (window.AY_CONFIG.version === '__AY_VERSION__') window.AY_CONFIG.version = '';
     // ?shot -> lay the whole scene out flat for a full-page screenshot (dev only)
     if (location.search.indexOf('shot') !== -1) document.documentElement.className = 'shot';
@@ -79,6 +82,7 @@
   <script src="js/termclip.js"></script>
   <script src="js/run.js"></script>
   <script src="js/term.js"></script>
+  <script src="js/onboard.js"></script>
   <script src="js/main.js"></script>
 </body>
 </html>

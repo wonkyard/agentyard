@@ -24,6 +24,7 @@ html, body {
   height: 100%;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 /* ---- header: brand + office/run toggle ------------------------------- */
@@ -49,6 +50,25 @@ html, body {
   font-size: 9px;
   color: var(--dim);
 }
+/* always-on "?" help affordance, left of the view toggle */
+#help-btn {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-right: auto;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+#help-btn:hover { color: #fff; border-color: #2ec4b6; }
+
 #view-toggle {
   display: inline-flex;
   border: 1px solid var(--line);
@@ -374,3 +394,146 @@ html.shot #status { display: none; }
   line-height: 1;
 }
 #panel-close:hover { color: #fff; }
+
+/* ---- first-run banner (demo badge / empty-state card) --------------- */
+#office-banner {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 7px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  border-bottom: 1px solid var(--line);
+}
+#office-banner[hidden] { display: none; }
+#office-banner.ay-banner-empty { background: #12261f; border-bottom-color: #2ec4b6; }
+#office-banner.ay-banner-demo { background: #1b1630; border-bottom-color: #6b4fbb; }
+#office-banner b { color: #fff; }
+#office-banner span { color: var(--dim); }
+.ay-banner-actions { display: inline-flex; gap: 6px; margin-left: auto; }
+
+/* ---- shared small button ------------------------------------------- */
+.ay-btn {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 10px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+.ay-btn:hover { border-color: #2ec4b6; }
+.ay-btn-primary { background: #2ec4b6; color: #0d0f16; border-color: #2ec4b6; font-weight: 700; }
+
+/* ---- overlay card: wizard + help --------------------------------- */
+#ay-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  background: rgba(6, 8, 12, 0.66);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+}
+#ay-overlay[hidden] { display: none; }
+#ay-overlay-card {
+  width: min(560px, 96%);
+  max-height: 92%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-top: 3px solid #2ec4b6;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.ay-card-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.ay-card-title { font-weight: 700; color: #fff; font-size: 12px; }
+.ay-card-x {
+  background: transparent; border: none; color: var(--dim);
+  font-size: 18px; line-height: 1; cursor: pointer;
+}
+.ay-card-x:hover { color: #fff; }
+.ay-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ay-card-body h3 { margin: 0 0 6px; font-size: 12px; color: #fff; }
+.ay-card-body p { margin: 0 0 8px; }
+.ay-ok { color: #7bd88f; }
+.ay-warn { color: #ffd166; }
+
+.ay-inline-row { display: flex; gap: 6px; margin: 6px 0; }
+.ay-input {
+  flex: 1 1 auto;
+  background: #10121a; color: var(--text);
+  border: 1px solid var(--line); border-radius: 3px;
+  font: inherit; font-size: 11px; padding: 4px 7px;
+}
+
+.ay-steps { margin-bottom: 10px; }
+.ay-wiz-dots { font-size: 9px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+.ay-wiz-nav { display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--line); padding-top: 10px; }
+.ay-wiz-spacer { flex: 1 1 auto; }
+
+.ay-starter-list { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 10px; }
+.ay-starter {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 8px;
+  align-items: baseline;
+  padding: 5px 7px;
+  background: #10121a;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.ay-starter-name { font-weight: 700; }
+.ay-starter-desc { grid-column: 2; color: var(--dim); font-size: 10px; }
+.ay-starter-result { margin-top: 8px; }
+.ay-starter-line { font-size: 10px; color: var(--dim); }
+
+.ay-help-nav { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+.ay-help-nav button {
+  background: transparent; color: var(--dim);
+  border: 1px solid var(--line); border-radius: 3px;
+  font: inherit; font-size: 10px; padding: 3px 8px; cursor: pointer;
+}
+.ay-help-nav button.on { background: #2ec4b6; color: #0d0f16; font-weight: 700; border-color: #2ec4b6; }
+.ay-help-content h1 { font-size: 13px; color: #fff; margin: 0 0 8px; }
+.ay-help-content h2 { font-size: 12px; color: #fff; margin: 12px 0 5px; }
+.ay-help-content h3 { font-size: 11px; color: var(--text); margin: 9px 0 4px; }
+.ay-help-content pre {
+  background: #10121a; border: 1px solid var(--line); border-radius: 3px;
+  padding: 7px 9px; overflow-x: auto; font-size: 10px;
+}
+.ay-help-content code { background: #10121a; padding: 0 3px; border-radius: 2px; font-size: 11px; }
+.ay-help-content pre code { background: none; padding: 0; }
+.ay-help-content table { border-collapse: collapse; margin: 6px 0; font-size: 11px; }
+.ay-help-content th, .ay-help-content td { border: 1px solid var(--line); padding: 3px 7px; text-align: left; }
+.ay-help-content a { color: #2ec4b6; }
+.ay-help-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+
+/* ---- Run-view spawn-failure actions ------------------------------- */
+.run-notice-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.run-notice-actions button {
+  background: transparent; color: #ffd166;
+  border: 1px solid #4a3f1e; border-radius: 3px;
+  font: inherit; font-size: 10px; padding: 3px 8px; cursor: pointer;
+}
+.run-notice-actions button:hover { color: #fff; border-color: #ffd166; }

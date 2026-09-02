@@ -2,7 +2,7 @@
   "name": "agentyard",
   "displayName": "Agentyard",
   "description": "A pixel-art view of your agent company, in the VS Code panel.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "wonkyard",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -73,6 +73,21 @@
       {
         "command": "agentyard.openClaudeTerminal",
         "title": "Open Claude Code Terminal",
+        "category": "Agentyard"
+      },
+      {
+        "command": "agentyard.setupGuide",
+        "title": "Setup Guide",
+        "category": "Agentyard"
+      },
+      {
+        "command": "agentyard.diagnostics",
+        "title": "Diagnostics",
+        "category": "Agentyard"
+      },
+      {
+        "command": "agentyard.createAgentFile",
+        "title": "New Department (Agent) File",
         "category": "Agentyard"
       }
     ],
