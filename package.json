@@ -1,14 +1,16 @@
 {
   "name": "agentyard",
   "displayName": "Agentyard",
-  "description": "A pixel-art view of your agent company, in the VS Code panel.",
-  "version": "1.0.2",
+  "description": "A pixel-art view of your agent company, in the VS Code panel. Works with Claude Code and Codex.",
+  "version": "1.1.0",
   "publisher": "wonkyard",
   "license": "MIT",
   "icon": "media/icon.png",
   "keywords": [
     "claude",
     "claude code",
+    "codex",
+    "agents.md",
     "agent",
     "ai",
     "monitor",
@@ -76,8 +78,18 @@
         "category": "Agentyard"
       },
       {
+        "command": "agentyard.openCodexTerminal",
+        "title": "Open Codex Terminal",
+        "category": "Agentyard"
+      },
+      {
         "command": "agentyard.setupGuide",
         "title": "Setup Guide",
+        "category": "Agentyard"
+      },
+      {
+        "command": "agentyard.setupGuidelines",
+        "title": "Set Up Agent Guidelines",
         "category": "Agentyard"
       },
       {
@@ -94,6 +106,20 @@
     "configuration": {
       "title": "Agentyard",
       "properties": {
+        "agentyard.agents": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "claude-code",
+              "codex"
+            ]
+          },
+          "default": [
+            "claude-code"
+          ],
+          "description": "Which coding-agent backends Agentyard works with. Drives the Run-view switcher, which guideline files the guidelines command manages, and which live sources are watched. An existing install stays Claude-Code-only until this is changed."
+        },
         "agentyard.dbPath": {
           "type": "string",
           "default": "state/company.db",
@@ -141,6 +167,19 @@
           },
           "default": [],
           "description": "Extra arguments appended verbatim when the Run view launches the Claude Code CLI, e.g. [\"--model\", \"opus\"] or [\"--allowedTools\", \"Read Edit Bash(npm test)\"]."
+        },
+        "agentyard.codexPath": {
+          "type": "string",
+          "default": "codex",
+          "description": "Command used to run the Codex CLI for the Run view. A bare name is looked up on PATH; on Windows Agentyard also tries codex.exe and codex.cmd. Uses your existing CLI login — no API key."
+        },
+        "agentyard.codexExtraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra arguments appended verbatim when the Run view launches the Codex CLI. Anything Codex needs (model, sandbox, approval flags) goes here — Agentyard does not map any Codex flags by default."
         },
         "agentyard.claudePermissionMode": {
           "type": "string",

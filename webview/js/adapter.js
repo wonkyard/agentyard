@@ -133,6 +133,11 @@
         maxSpritesPerRoom: msg.maxSpritesPerRoom || 8,
         platform: msg.platform || null, // §7: local_path match case-sensitivity
         staleWorkingHours: msg.staleWorkingHours, // optional; model defaults to 3h
+        // v1.1 first-run / banner hints
+        rosterEmpty: !!msg.rosterEmpty,
+        hasWorkspace: !!msg.hasWorkspace,
+        agents: Array.isArray(msg.agents) ? msg.agents : ['claude-code'],
+        guideline: msg.guideline || null,
       };
       const w = waiters;
       waiters = [];
@@ -155,17 +160,19 @@
       onTerm(fn) {
         if (typeof fn === 'function') termListeners.push(fn);
       },
-      termAttach(cols, rows) {
-        vscode.postMessage({ type: 'term', event: 'attach', cols, rows });
+      // Every term message carries a `backend` id ('claude-code' | 'codex' | …)
+      // so the extension routes it to that backend's pty.
+      termAttach(backend, cols, rows) {
+        vscode.postMessage({ type: 'term', event: 'attach', backend, cols, rows });
       },
-      termInput(data) {
-        vscode.postMessage({ type: 'term', event: 'input', data: String(data) });
+      termInput(backend, data) {
+        vscode.postMessage({ type: 'term', event: 'input', backend, data: String(data) });
       },
-      termResize(cols, rows) {
-        vscode.postMessage({ type: 'term', event: 'resize', cols, rows });
+      termResize(backend, cols, rows) {
+        vscode.postMessage({ type: 'term', event: 'resize', backend, cols, rows });
       },
-      termNew() {
-        vscode.postMessage({ type: 'term', event: 'new' });
+      termNew(backend) {
+        vscode.postMessage({ type: 'term', event: 'new', backend });
       },
       onboardSupported: true,
       sendMsg(msg) {

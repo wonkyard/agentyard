@@ -7,9 +7,15 @@ const path = require('path');
 const cp = require('child_process');
 const { toDepartments } = require('./shared/frontmatter.js');
 const hooksConfig = require('./shared/hooksConfig.js');
-const { buildClaudeArgs, buildInteractiveClaudeArgs, candidateCommands } = require('./shared/claudeArgs.js');
+const {
+  buildClaudeArgs,
+  buildInteractiveClaudeArgs,
+  buildInteractiveCodexArgs,
+  candidateCommands,
+} = require('./shared/claudeArgs.js');
 const { needsCmdWrap, resolveLauncher } = require('./shared/winWrap.js');
 const claudeResolve = require('./shared/claudeResolve.js');
+const guidelines = require('./shared/guidelines.js');
 const { StreamJsonParser } = require('./shared/streamJson.js');
 const { killTree, spawnGroupOpts } = require('./shared/killTree.js');
 const attach = require('./shared/attach.js');
@@ -32,6 +38,61 @@ const PTY_UNAVAILABLE_NOTICE =
   "Live terminal needs a native component that didn't load on this platform — " +
   'using the non-interactive runner. Run "Agentyard: Open Claude Code Terminal" ' +
   'for a full session.';
+
+// ---- coding-agent backends -----------------------------------------
+// Everything CLI-specific routes through one of these: the Run-view switcher,
+// which instructions file the guidelines command manages, which live sources
+// are watched. Adding a backend means adding an entry here.
+const KNOWN_AGENTS = ['claude-code', 'codex'];
+
+const BACKENDS = {
+  'claude-code': {
+    id: 'claude-code',
+    name: 'Claude Code',
+    cliDefault: 'claude',
+    cliSetting: 'claudePath',
+    docsUrl: 'https://docs.anthropic.com/claude-code',
+    instructionsFile: 'CLAUDE.md',
+    buildInteractiveArgs(cfg) {
+      return buildInteractiveClaudeArgs({
+        claudePath: cfg.get('claudePath', 'claude'),
+        permissionMode: cfg.get('claudePermissionMode', 'default'),
+        extraArgs: cfg.get('claudeExtraArgs', []),
+      });
+    },
+  },
+  codex: {
+    id: 'codex',
+    name: 'Codex',
+    cliDefault: 'codex',
+    cliSetting: 'codexPath',
+    docsUrl: 'https://github.com/openai/codex',
+    instructionsFile: 'AGENTS.md',
+    buildInteractiveArgs(cfg) {
+      return buildInteractiveCodexArgs({
+        codexPath: cfg.get('codexPath', 'codex'),
+        extraArgs: cfg.get('codexExtraArgs', []),
+      });
+    },
+  },
+};
+
+// The enabled backend id list, de-duped and validated. Default (and any
+// unrecognised value) → Claude Code only, so an existing install is unchanged.
+function enabledAgents() {
+  const raw = vscode.workspace.getConfiguration('agentyard').get('agents', ['claude-code']);
+  const out = [];
+  if (Array.isArray(raw)) {
+    for (const id of raw) {
+      if (KNOWN_AGENTS.indexOf(id) !== -1 && out.indexOf(id) === -1) out.push(id);
+    }
+  }
+  return out.length ? out : ['claude-code'];
+}
+
+function backendFor(id) {
+  return BACKENDS[id] || BACKENDS['claude-code'];
+}
 
 function nonce() {
   let s = '';
@@ -78,6 +139,7 @@ function installHook() {
 
 // Bundled first-run content (shipped in the .vsix — see .vscodeignore).
 const STARTER_AGENTS_DIR = path.join(__dirname, 'media', 'starter-agents');
+const STARTER_GUIDELINES = path.join(__dirname, 'media', 'starter-guidelines', 'AGENTS.md');
 const HELP_DIR = path.join(__dirname, 'media', 'help');
 const USER_AGENTS_DIR = path.join(os.homedir(), '.claude', 'agents');
 
@@ -137,6 +199,32 @@ const DEMO = {
   watch: false,
 };
 
+function dirHasMarkdown(dir) {
+  try {
+    return fs.readdirSync(dir).some((f) => f.endsWith('.md'));
+  } catch (e) {
+    return false;
+  }
+}
+
+// Any Claude Code hook log (events-*.jsonl) touched within the stale-file
+// window — i.e. some coding agent is or was very recently active.
+function hasRecentLiveActivity() {
+  const now = Date.now();
+  try {
+    return fs.readdirSync(EVENTS_DIR).some((f) => {
+      if (!/^events-.*\.jsonl$/.test(f)) return false;
+      try {
+        return now - fs.statSync(path.join(EVENTS_DIR, f)).mtimeMs < STALE_FILE_MS;
+      } catch (e) {
+        return false;
+      }
+    });
+  } catch (e) {
+    return false;
+  }
+}
+
 function paths() {
   const cfg = vscode.workspace.getConfiguration('agentyard');
   const pollSeconds = cfg.get('pollSeconds', 3);
@@ -144,7 +232,15 @@ function paths() {
   if (!root) return { ...DEMO, pollSeconds };
   const db = path.join(root, cfg.get('dbPath', 'state/company.db'));
   const depts = path.join(root, cfg.get('agentsGlob', '.claude/agents'));
-  if (!fs.existsSync(db) || !fs.existsSync(depts)) return { ...DEMO, pollSeconds, root };
+  // v1.1: a ROSTER — not company.db — is what makes this "workspace" mode. A
+  // roster exists if the workspace .claude/agents has .md files, or the user's
+  // ~/.claude/agents does, or any coding agent has recent live activity.
+  // company.db missing just leaves the board / annex layers empty.
+  const hasRoster =
+    dirHasMarkdown(depts) ||
+    dirHasMarkdown(USER_AGENTS_DIR) ||
+    hasRecentLiveActivity();
+  if (!hasRoster) return { ...DEMO, pollSeconds, root };
   let team = path.join(root, 'templates', 'project-repo', '.claude', 'agents');
   if (!fs.existsSync(team)) team = DEMO.team;
   return { root, db, depts, team, dataMode: 'workspace', watch: true, pollSeconds };
@@ -205,14 +301,14 @@ function resolveWinLauncher(command) {
   });
 }
 
-// Resolve the configured `claude` command to a concrete { file, args } that can
-// be handed to node-pty with NO shell — the same no-cmd.exe guarantee the
-// headless runner keeps (see shared/winWrap.js). Tries the platform candidate
-// list (claude.exe -> claude.cmd -> … on Windows); a `.cmd`/`.bat` shim is
-// resolved to the real executable it forwards to, never shelled. Returns null
-// if nothing runnable was found — the caller then tells the user to set an
-// explicit claudePath.
-function resolvePtyClaude(command, baseArgs) {
+// Resolve a configured CLI command (claude, codex, …) to a concrete
+// { file, args } that can be handed to node-pty with NO shell — the same
+// no-cmd.exe guarantee the headless runner keeps (see shared/winWrap.js). Tries
+// the platform candidate list (name.exe -> name.cmd -> … on Windows); a
+// `.cmd`/`.bat` shim is resolved to the real executable it forwards to, never
+// shelled. Returns null if nothing runnable was found — the caller then tells
+// the user to set an explicit path setting.
+function resolvePtyCli(command, baseArgs) {
   for (const cand of candidateCommands(command, process.platform)) {
     if (needsCmdWrap(cand, process.platform)) {
       const resolved = resolveWinLauncher(cand);
@@ -566,6 +662,15 @@ class RunController {
     }
     prompt = String(prompt == null ? '' : prompt);
     if (!prompt.trim()) return;
+    // The headless feed is Claude Code only (v1.1). A Codex-only install must use
+    // the interactive terminal Run view — headless Codex is a v1.2 follow-up.
+    if (enabledAgents().indexOf('claude-code') === -1) {
+      this.post({
+        type: 'run', event: 'error',
+        message: 'The headless Run view supports Claude Code only. Set agentyard.runView to "terminal" to use Codex.',
+      });
+      return;
+    }
     const root = workspaceRoot();
     if (!root) {
       this.post({ type: 'run', event: 'error', message: 'Open a workspace folder first — runs use the folder as the working directory.' });
@@ -737,21 +842,30 @@ class RunController {
   }
 }
 
-// ---- run Claude Code in an embedded terminal -----------------------
+// ---- run a coding agent in an embedded terminal -------------------
 // The Run view's xterm.js surface talks to this over the webview postMessage
-// channel. One pty per panel, kept here in the extension host so a webview
-// reload re-attaches to the running session instead of restarting it. Spawns
-// the user's own INTERACTIVE `claude` (never `-p`) with their existing CLI
-// auth — no API key. The command is always an argv array through node-pty, so
-// there is no shell and cmd.exe is never involved (v0.4 guarantee).
+// channel. ONE instance per enabled backend (Claude Code, Codex, …), each with
+// its own pty, kept here in the extension host so a webview reload re-attaches
+// to the running session instead of restarting it. Spawns the user's own
+// INTERACTIVE CLI (never `-p`) with their existing CLI auth — no API key. The
+// command is always an argv array through node-pty, so there is no shell and
+// cmd.exe is never involved (v0.4 guarantee — kept for every backend).
 class TerminalRun {
-  constructor(post) {
-    this.post = post; // (msg) => void, to the webview
+  constructor(post, backend) {
+    this._postRaw = post; // (msg) => void, to the webview
+    this.backend = backend || BACKENDS['claude-code'];
     this.pty = null;
     this.cols = 80;
     this.rows = 24;
     this.buffer = []; // recent output chunks, replayed on re-attach
     this.bufferLen = 0;
+  }
+
+  // Every message this backend posts is tagged with its id so the webview
+  // routes it to the right terminal surface.
+  _post(msg) {
+    msg.backend = this.backend.id;
+    this._postRaw(msg);
   }
 
   _bufferPush(data) {
@@ -764,7 +878,7 @@ class TerminalRun {
   }
 
   _say(text) {
-    this.post({ type: 'term', event: 'data', data: text });
+    this._post({ type: 'term', event: 'data', data: text });
   }
 
   // A resolve/spawn failure: print the friendly message in the terminal AND
@@ -772,7 +886,7 @@ class TerminalRun {
   // [도움말] buttons (no browser dialog).
   _failSpawn(message, raw) {
     this._say('\r\n\x1b[31m' + String(message).replace(/\n/g, '\r\n') + '\x1b[0m\r\n');
-    this.post({ type: 'term', event: 'spawn-failed', message: String(message), raw: raw || null });
+    this._post({ type: 'term', event: 'spawn-failed', message: String(message), raw: raw || null });
   }
 
   // The webview's terminal has connected — first load, or after a reload.
@@ -784,7 +898,7 @@ class TerminalRun {
       return;
     }
     if (!nodePty) {
-      this.post({ type: 'term', event: 'unavailable', message: PTY_UNAVAILABLE_NOTICE });
+      this._post({ type: 'term', event: 'unavailable', message: PTY_UNAVAILABLE_NOTICE });
       return;
     }
     this._spawn();
@@ -800,23 +914,19 @@ class TerminalRun {
     const cfg = vscode.workspace.getConfiguration('agentyard');
     let built;
     try {
-      built = buildInteractiveClaudeArgs({
-        claudePath: cfg.get('claudePath', 'claude'),
-        permissionMode: cfg.get('claudePermissionMode', 'default'),
-        extraArgs: cfg.get('claudeExtraArgs', []),
-      });
+      built = this.backend.buildInteractiveArgs(cfg);
     } catch (e) {
       this._say('\r\n\x1b[31mBad Agentyard run config: ' + e.message + '\x1b[0m\r\n');
       return;
     }
 
-    const resolved = resolvePtyClaude(built.command, built.args);
+    const resolved = resolvePtyCli(built.command, built.args);
     if (!resolved) {
       this._failSpawn(claudeResolve.friendlySpawnMessage(
-        { message: 'not found on PATH' }, built.command, process.platform));
+        { message: 'not found on PATH' }, built.command, process.platform, this.backend.id));
       return;
     }
-    // Run a `#!…node` claude script under VS Code's bundled Node so it doesn't
+    // Run a `#!…node` CLI script under VS Code's bundled Node so it doesn't
     // depend on `node` being on the (minimal, GUI-inherited) PATH.
     const target = withNodeShebang(resolved);
     const env = { ...augmentedEnv().env };
@@ -832,7 +942,10 @@ class TerminalRun {
         rows: this.rows,
       });
     } catch (e) {
-      this._failSpawn(claudeResolve.friendlySpawnMessage(e, built.command, process.platform), e.message);
+      this._failSpawn(
+        claudeResolve.friendlySpawnMessage(e, built.command, process.platform, this.backend.id),
+        e.message
+      );
       return;
     }
 
@@ -842,13 +955,13 @@ class TerminalRun {
     pty.onData((d) => {
       if (this.pty !== pty) return;
       this._bufferPush(d);
-      this.post({ type: 'term', event: 'data', data: d });
+      this._post({ type: 'term', event: 'data', data: d });
     });
     pty.onExit((e) => {
       if (this.pty !== pty) return;
       this.pty = null;
       const code = e && typeof e.exitCode === 'number' ? e.exitCode : null;
-      this.post({ type: 'term', event: 'exit', code });
+      this._post({ type: 'term', event: 'exit', code });
     });
   }
 
@@ -970,6 +1083,7 @@ function getHtml(webview, extUri, context) {
       <div id="run-notice" hidden></div>
       <div id="run-term" hidden></div>
       <div id="run-term-foot" hidden>
+        <span id="run-backend-switch" hidden></span>
         <button type="button" id="run-term-attach" class="attach-btn" title="Attach a file or image">📎 Attach</button>
         <button type="button" id="run-term-new">New thread</button>
         <span id="run-term-meta"></span>
@@ -991,7 +1105,7 @@ function getHtml(webview, extUri, context) {
     </div>
   </div>
   <script nonce="${n}">
-    window.AY_CONFIG = { mode: 'vscode', version: ${JSON.stringify(pkg.version)}, pollSeconds: ${JSON.stringify(cfg.get('pollSeconds', 3))}, wasmUrl: ${JSON.stringify(wasmUrl)}, runView: ${JSON.stringify(runView)}, runViewRequested: ${JSON.stringify(runViewRequested)}, ptyAvailable: ${JSON.stringify(ptyAvailable)}, platform: ${JSON.stringify(process.platform)}, terminalCopyPaste: ${JSON.stringify(cfg.get('terminalCopyPaste', true))}, copyOnSelection: ${JSON.stringify(cfg.get('copyOnSelection', false))}, onboarded: ${JSON.stringify(onboarded)} };
+    window.AY_CONFIG = { mode: 'vscode', version: ${JSON.stringify(pkg.version)}, pollSeconds: ${JSON.stringify(cfg.get('pollSeconds', 3))}, wasmUrl: ${JSON.stringify(wasmUrl)}, runView: ${JSON.stringify(runView)}, runViewRequested: ${JSON.stringify(runViewRequested)}, ptyAvailable: ${JSON.stringify(ptyAvailable)}, platform: ${JSON.stringify(process.platform)}, agents: ${JSON.stringify(enabledAgents())}, terminalCopyPaste: ${JSON.stringify(cfg.get('terminalCopyPaste', true))}, copyOnSelection: ${JSON.stringify(cfg.get('copyOnSelection', false))}, onboarded: ${JSON.stringify(onboarded)} };
   </script>
   ${scripts}
 </body>
@@ -1001,11 +1115,13 @@ function getHtml(webview, extUri, context) {
 function collectSnapshot(live) {
   const p = paths();
   const cfg = vscode.workspace.getConfiguration('agentyard');
+  // v1.1: a missing company.db is NOT an error. The roster + live activity
+  // drive the scene; the board / annex layers just stay empty.
   let dbBase64 = '';
   try {
     dbBase64 = fs.readFileSync(p.db).toString('base64');
   } catch (e) {
-    return { type: 'data', error: 'cannot read ' + p.db + ': ' + e.message };
+    dbBase64 = '';
   }
   const departments = p.dataMode === 'demo' ? readAgentDir(p.depts) : readRoster(p.depts);
   return {
@@ -1026,6 +1142,23 @@ function collectSnapshot(live) {
     hasWorkspace: !!workspaceRoot(),
     rosterEmpty: p.dataMode === 'workspace' && departments.length === 0,
     userRosterCount: readAgentDir(USER_AGENTS_DIR).length,
+    agents: enabledAgents(),
+    guideline: guidelineState(p.root),
+  };
+}
+
+// Presence + sync state of the enabled backends' instruction files at the
+// workspace root. A hint for the banner / guidelines command — never an error.
+function guidelineState(root) {
+  if (!root) return { agentsMd: 'absent', claudeMd: 'absent', sync: 'n/a' };
+  const aText = safeRead(path.join(root, 'AGENTS.md'));
+  const cText = safeRead(path.join(root, 'CLAUDE.md'));
+  const a = !!aText.trim();
+  const c = !!cText.trim();
+  return {
+    agentsMd: a ? 'present' : 'absent',
+    claudeMd: !c ? 'absent' : (guidelines.isPointer(cText) ? 'pointer' : 'present'),
+    sync: guidelines.classify({ agentsMd: a, claudeMd: c, claudeText: cText }),
   };
 }
 
@@ -1098,10 +1231,9 @@ function helpTopics() {
   });
 }
 
-// Resolve the configured claude to a concrete target for the diagnostics report.
-function diagnoseClaude() {
-  const cfg = vscode.workspace.getConfiguration('agentyard');
-  const command = cfg.get('claudePath', 'claude');
+// Resolve a configured CLI command to a concrete target for diagnostics / the
+// first-run picker. CLI-agnostic — the same probe for `claude` and `codex`.
+function diagnoseCli(command) {
   const out = { command, resolved: null, shebang: null, viaAugment: false };
   for (const cand of candidateCommands(command, process.platform)) {
     if (needsCmdWrap(cand, process.platform)) {
@@ -1124,6 +1256,14 @@ function diagnoseClaude() {
   return out;
 }
 
+function diagnoseClaude() {
+  return diagnoseCli(vscode.workspace.getConfiguration('agentyard').get('claudePath', 'claude'));
+}
+
+function diagnoseCodex() {
+  return diagnoseCli(vscode.workspace.getConfiguration('agentyard').get('codexPath', 'codex'));
+}
+
 function buildDiagnostics() {
   const cfg = vscode.workspace.getConfiguration('agentyard');
   const p = paths();
@@ -1137,12 +1277,16 @@ function buildDiagnostics() {
   L.push('extension         : agentyard ' + pkg.version);
   L.push('node (execPath)    : ' + process.execPath);
   L.push('');
+  L.push('enabled agents     : ' + enabledAgents().join(', '));
   L.push('claude (configured): ' + cl.command);
   L.push('claude (resolved)  : ' + (cl.resolved || 'NOT FOUND on PATH or common install dirs'));
   if (cl.resolved) {
     L.push('  via PATH augment : ' + (cl.viaAugment ? 'yes' : 'no'));
     L.push('  shebang script   : ' + (cl.shebang ? cl.shebang + '  → run under VS Code Node' : 'no (native binary)'));
   }
+  const cx = diagnoseCodex();
+  L.push('codex (configured) : ' + cx.command);
+  L.push('codex (resolved)   : ' + (cx.resolved || 'NOT FOUND on PATH or common install dirs'));
   L.push('PATH dirs added    : ' + (aug.added.length ? aug.added.join(', ') : '(none — PATH already had them or they do not exist)'));
   L.push('');
   L.push('node-pty          : ' + (nodePty ? 'loaded' : 'NOT loaded — ' + (nodePtyError || 'unknown') + ' (Run view falls back to headless)'));
@@ -1155,7 +1299,7 @@ function buildDiagnostics() {
     : 'no workspace folder open'));
   L.push('');
   L.push('settings');
-  for (const k of ['claudePath', 'claudePermissionMode', 'runView', 'pollSeconds', 'dbPath', 'agentsGlob', 'staleWorkingHours']) {
+  for (const k of ['agents', 'claudePath', 'claudePermissionMode', 'codexPath', 'runView', 'pollSeconds', 'dbPath', 'agentsGlob', 'staleWorkingHours']) {
     L.push('  agentyard.' + k + ' = ' + JSON.stringify(cfg.get(k)));
   }
   return L.join('\n');
@@ -1179,9 +1323,23 @@ class OfficeViewProvider {
     this.run = new RunController((m) => {
       if (this.view) this.view.webview.postMessage(m);
     });
-    this.term = new TerminalRun((m) => {
-      if (this.view) this.view.webview.postMessage(m);
-    });
+    // One embedded terminal per enabled backend, lazily created on first attach.
+    this.terms = new Map(); // backend id -> TerminalRun
+  }
+
+  termFor(id) {
+    const backend = backendFor(id);
+    let t = this.terms.get(backend.id);
+    if (!t) {
+      t = new TerminalRun((m) => { if (this.view) this.view.webview.postMessage(m); }, backend);
+      this.terms.set(backend.id, t);
+    }
+    return t;
+  }
+
+  disposeTerms() {
+    for (const t of this.terms.values()) t.dispose();
+    this.terms.clear();
   }
 
   pushData() {
@@ -1275,6 +1433,8 @@ class OfficeViewProvider {
         onboarded: !!gs.get(ONBOARDED_KEY),
         hasWorkspace: !!workspaceRoot(),
         claude: diagnoseClaude(),
+        codex: diagnoseCodex(),
+        agents: enabledAgents(),
         starters: listStarterAgents(),
         userAgentsDir: USER_AGENTS_DIR,
       });
@@ -1294,11 +1454,31 @@ class OfficeViewProvider {
       this.post({ type: 'onboard', event: 'claude', claude: diagnoseClaude() });
       return;
     }
+    if (msg.action === 'detectClis') {
+      this.post({ type: 'onboard', event: 'clis', claude: diagnoseClaude(), codex: diagnoseCodex() });
+      return;
+    }
     if (msg.action === 'setClaudePath') {
       const v = String(msg.path || '').trim();
       vscode.workspace.getConfiguration('agentyard')
         .update('claudePath', v || undefined, vscode.ConfigurationTarget.Global)
         .then(() => this.post({ type: 'onboard', event: 'claude', claude: diagnoseClaude() }));
+      return;
+    }
+    if (msg.action === 'setAgents') {
+      const list = Array.isArray(msg.agents)
+        ? msg.agents.filter((x) => KNOWN_AGENTS.indexOf(x) !== -1)
+        : [];
+      const val = list.length ? Array.from(new Set(list)) : ['claude-code'];
+      vscode.workspace.getConfiguration('agentyard')
+        .update('agents', val, vscode.ConfigurationTarget.Global)
+        .then(() => {
+          this.post({
+            type: 'onboard', event: 'clis',
+            agents: enabledAgents(), claude: diagnoseClaude(), codex: diagnoseCodex(),
+          });
+          this.pushData();
+        });
       return;
     }
     if (msg.action === 'createAgents') {
@@ -1335,10 +1515,17 @@ class OfficeViewProvider {
   handleUi(msg) {
     if (msg.action === 'openClaudePathSetting') {
       vscode.commands.executeCommand('workbench.action.openSettings', 'agentyard.claudePath');
+    } else if (msg.action === 'openCliPathSetting') {
+      const key = msg.backend === 'codex' ? 'agentyard.codexPath' : 'agentyard.claudePath';
+      vscode.commands.executeCommand('workbench.action.openSettings', key);
     } else if (msg.action === 'diagnostics') {
       showDiagnostics();
     } else if (msg.action === 'openClaudeTerminal') {
       openClaudeTerminal();
+    } else if (msg.action === 'openCodexTerminal') {
+      openCodexTerminal();
+    } else if (msg.action === 'setupGuidelines') {
+      vscode.commands.executeCommand('agentyard.setupGuidelines');
     } else if (msg.action === 'openExternal' && msg.url) {
       try { vscode.env.openExternal(vscode.Uri.parse(String(msg.url))); } catch (e) { /* ignore */ }
     } else if (msg.action === 'liveMode') {
@@ -1359,7 +1546,7 @@ class OfficeViewProvider {
     this.stop();
     this.live.stop();
     this.run.dispose();
-    this.term.dispose();
+    this.disposeTerms();
   }
 
   startWatchers() {
@@ -1409,10 +1596,11 @@ class OfficeViewProvider {
         else if (msg.action === 'status') this.run.pushStatus();
       }
       if (msg.type === 'term') {
-        if (msg.event === 'attach') this.term.attach(msg.cols, msg.rows);
-        else if (msg.event === 'input') this.term.input(String(msg.data == null ? '' : msg.data));
-        else if (msg.event === 'resize') this.term.resize(msg.cols, msg.rows);
-        else if (msg.event === 'new') { this.term.newThread(); this.clearAttachments(); }
+        const bt = this.termFor(msg.backend || enabledAgents()[0]);
+        if (msg.event === 'attach') bt.attach(msg.cols, msg.rows);
+        else if (msg.event === 'input') bt.input(String(msg.data == null ? '' : msg.data));
+        else if (msg.event === 'resize') bt.resize(msg.cols, msg.rows);
+        else if (msg.event === 'new') { bt.newThread(); this.clearAttachments(); }
       }
       if (msg.type === 'clip') this.handleClip(msg);
       if (msg.type === 'attach') this.handleAttach(msg);
@@ -1427,8 +1615,8 @@ class OfficeViewProvider {
 
     webviewView.onDidDispose(() => {
       this.stop();
-      // The panel is gone — kill the pty so no orphan `claude` is left behind.
-      this.term.dispose();
+      // The panel is gone — kill every backend's pty so no orphan CLI is left behind.
+      this.disposeTerms();
       this.view = null;
     });
 
@@ -1456,10 +1644,41 @@ function openClaudeTerminal() {
   term.show();
 }
 
+// Same, for Codex — a normal integrated terminal running the configured
+// codexPath in the workspace folder.
+function openCodexTerminal() {
+  const root = workspaceRoot();
+  const codexPath = vscode.workspace.getConfiguration('agentyard').get('codexPath', 'codex');
+  const term = vscode.window.createTerminal({ name: 'Codex', cwd: root || undefined });
+  term.sendText(codexPath, true);
+  term.show();
+}
+
+// First run only: if the user has not set `agentyard.agents` and only Codex is
+// on PATH, default to Codex; if both CLIs are present, enable both. Otherwise
+// leave the Claude-Code-only default untouched.
+function maybeSeedAgents(context) {
+  try {
+    if (context.globalState.get(ONBOARDED_KEY)) return;
+    const cfg = vscode.workspace.getConfiguration('agentyard');
+    const insp = cfg.inspect('agents');
+    if (insp && (insp.globalValue !== undefined || insp.workspaceValue !== undefined)) return;
+    const hasClaude = !!diagnoseCli(cfg.get('claudePath', 'claude')).resolved;
+    const hasCodex = !!diagnoseCli(cfg.get('codexPath', 'codex')).resolved;
+    let want = null;
+    if (hasClaude && hasCodex) want = ['claude-code', 'codex'];
+    else if (hasCodex && !hasClaude) want = ['codex'];
+    if (want) cfg.update('agents', want, vscode.ConfigurationTarget.Global);
+  } catch (e) {
+    /* best effort — the default stands */
+  }
+}
+
 function activate(context) {
   installHook();
   migrateHookPath();
   const provider = new OfficeViewProvider(context);
+  maybeSeedAgents(context);
   provider.live.start();
 
   context.subscriptions.push(
@@ -1478,7 +1697,9 @@ function activate(context) {
       disableLiveMode().then(() => provider.pushData())
     ),
     vscode.commands.registerCommand('agentyard.openClaudeTerminal', openClaudeTerminal),
+    vscode.commands.registerCommand('agentyard.openCodexTerminal', openCodexTerminal),
     vscode.commands.registerCommand('agentyard.setupGuide', () => provider.openSetupGuide()),
+    vscode.commands.registerCommand('agentyard.setupGuidelines', () => setupGuidelinesCommand(provider)),
     vscode.commands.registerCommand('agentyard.diagnostics', showDiagnostics),
     vscode.commands.registerCommand('agentyard.createAgentFile', () => createAgentFileCommand(provider))
   );
@@ -1507,6 +1728,102 @@ async function createAgentFileCommand(provider) {
   else if (r && r.state === 'exists') vscode.window.showInformationMessage('이미 있어서 그대로 엽니다: ' + target);
   try { await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(target)); } catch (e) { /* ignore */ }
   if (provider) provider.pushData();
+}
+
+// `Agentyard: Set Up Agent Guidelines` — scaffold a canonical AGENTS.md and keep
+// CLAUDE.md in sync as a thin `@AGENTS.md` pointer. Never clobbers an existing
+// CLAUDE.md: every write is confirmed and a `.agentyard-backup` is saved first,
+// the same discipline as the settings.json hook merge. Pure decision logic lives
+// in shared/guidelines.js. First workspace folder root only.
+async function setupGuidelinesCommand(provider) {
+  const root = workspaceRoot();
+  if (!root) {
+    vscode.window.showWarningMessage('Open a workspace folder first — guidelines live at its root.');
+    return;
+  }
+  const agentsPath = path.join(root, 'AGENTS.md');
+  const claudePath = path.join(root, 'CLAUDE.md');
+  const aText = safeRead(agentsPath);
+  const cText = safeRead(claudePath);
+  const a = !!aText.trim();
+  const c = !!cText.trim();
+  const claudeEnabled = enabledAgents().indexOf('claude-code') !== -1;
+  const plan = guidelines.plan({ agentsMd: a, claudeMd: c, claudeText: cText, claudeEnabled });
+
+  const starter = safeRead(STARTER_GUIDELINES) || '# Project\n\nTODO: describe this project.\n';
+  const backupThenWrite = (p, content) => {
+    try {
+      if (fs.existsSync(p)) fs.copyFileSync(p, p + '.agentyard-backup');
+      fs.writeFileSync(p, content);
+      return true;
+    } catch (e) {
+      vscode.window.showErrorMessage('Agentyard could not write ' + p + ': ' + e.message);
+      return false;
+    }
+  };
+  const openAgents = async () => {
+    try { await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(agentsPath)); } catch (e) { /* ignore */ }
+    if (provider) provider.pushData();
+  };
+
+  if (plan.action === 'none') {
+    vscode.window.showInformationMessage('Agent guidelines are already "' + plan.status + '". Nothing to do.');
+    await openAgents();
+    return;
+  }
+
+  if (plan.action === 'create') {
+    const willPointer = plan.createClaudePointer || plan.fromClaude;
+    const body = plan.fromClaude ? cText : starter;
+    const label = plan.fromClaude ? 'from your CLAUDE.md' : 'from a starter template';
+    const ok = await vscode.window.showInformationMessage(
+      'Create AGENTS.md ' + label +
+        (willPointer ? ', and make CLAUDE.md a "@AGENTS.md" pointer' : '') +
+        '? Any existing file is backed up to .agentyard-backup first.',
+      { modal: true }, 'Create'
+    );
+    if (ok !== 'Create') return;
+    if (!backupThenWrite(agentsPath, body)) return;
+    if (willPointer) backupThenWrite(claudePath, guidelines.pointerText());
+    vscode.window.showInformationMessage('AGENTS.md is set up — edit it; CLAUDE.md imports it.');
+    await openAgents();
+    return;
+  }
+
+  if (plan.action === 'choose') {
+    const pick = await vscode.window.showQuickPick(
+      [
+        { label: 'Keep them separate', value: 'keep-separate',
+          detail: 'Do nothing to CLAUDE.md — you manage both files.' },
+        { label: 'Append @AGENTS.md to CLAUDE.md', value: 'append-import',
+          detail: 'Add the import line only. Your CLAUDE.md content stays put.' },
+        { label: 'Make CLAUDE.md a pointer', value: 'make-pointer',
+          detail: 'Move the CLAUDE.md body into AGENTS.md; CLAUDE.md becomes "@AGENTS.md".' },
+      ],
+      { placeHolder: 'CLAUDE.md already has content — how should it relate to AGENTS.md?' }
+    );
+    if (!pick) return;
+    if (pick.value === 'keep-separate') {
+      if (!a && !backupThenWrite(agentsPath, starter)) return;
+      vscode.window.showInformationMessage(
+        'Left CLAUDE.md as-is.' + (!a ? ' Created a starter AGENTS.md alongside it.' : ''));
+      await openAgents();
+      return;
+    }
+    if (pick.value === 'append-import') {
+      if (!a && !backupThenWrite(agentsPath, starter)) return;
+      if (!backupThenWrite(claudePath, guidelines.appendImportText(cText))) return;
+      vscode.window.showInformationMessage('Added "@AGENTS.md" to CLAUDE.md. A backup was saved.');
+      await openAgents();
+      return;
+    }
+    if (pick.value === 'make-pointer') {
+      if (!backupThenWrite(agentsPath, guidelines.mergedAgentsText(aText, cText))) return;
+      if (!backupThenWrite(claudePath, guidelines.pointerText())) return;
+      vscode.window.showInformationMessage('CLAUDE.md now points at AGENTS.md. Both files were backed up.');
+      await openAgents();
+    }
+  }
 }
 
 function deactivate() {}

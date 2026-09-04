@@ -30,6 +30,7 @@
       <div id="run-notice" hidden></div>
       <div id="run-term" hidden></div>
       <div id="run-term-foot" hidden>
+        <span id="run-backend-switch" hidden></span>
         <button type="button" id="run-term-attach" class="attach-btn" title="Attach a file or image">📎 Attach</button>
         <button type="button" id="run-term-new">New thread</button>
         <span id="run-term-meta"></span>
@@ -56,8 +57,13 @@
     // The embedded terminal needs the extension host (node-pty), so the browser
     // dev server always previews the headless feed.
     // scripts/dev-server.mjs replaces __AY_VERSION__ with package.json's version.
-    window.AY_CONFIG = window.AY_CONFIG || { mode: 'browser', version: '__AY_VERSION__', pollSeconds: 3, wasmUrl: 'vendor/sql-wasm.wasm', runView: 'headless', runViewRequested: 'headless', ptyAvailable: false, platform: 'browser', terminalCopyPaste: true, copyOnSelection: false, onboarded: true };
+    window.AY_CONFIG = window.AY_CONFIG || { mode: 'browser', version: '__AY_VERSION__', pollSeconds: 3, wasmUrl: 'vendor/sql-wasm.wasm', runView: 'headless', runViewRequested: 'headless', ptyAvailable: false, platform: 'browser', agents: '__AY_AGENTS__', terminalCopyPaste: true, copyOnSelection: false, onboarded: true };
     if (window.AY_CONFIG.version === '__AY_VERSION__') window.AY_CONFIG.version = '';
+    // backend list: the dev server injects it; fall back to Claude Code, and let
+    // ?agents=claude-code,codex override for layout work.
+    if (!Array.isArray(window.AY_CONFIG.agents)) window.AY_CONFIG.agents = ['claude-code'];
+    var _am = location.search.match(/[?&]agents=([^&]+)/);
+    if (_am) window.AY_CONFIG.agents = decodeURIComponent(_am[1]).split(',').map(function (s) { return s.trim(); }).filter(Boolean);
     // ?shot -> lay the whole scene out flat for a full-page screenshot (dev only)
     if (location.search.indexOf('shot') !== -1) document.documentElement.className = 'shot';
     // ?view=run -> open the run view on load (dev / screenshot helper)

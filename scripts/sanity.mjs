@@ -16,7 +16,9 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { toDepartments } = require('../shared/frontmatter.js');
 const hooksConfig = require('../shared/hooksConfig.js');
-const { buildClaudeArgs, buildInteractiveClaudeArgs, candidateCommands } = require('../shared/claudeArgs.js');
+const { buildClaudeArgs, buildInteractiveClaudeArgs, buildInteractiveCodexArgs, candidateCommands } = require('../shared/claudeArgs.js');
+const guidelines = require('../shared/guidelines.js');
+const codexSessions = require('../shared/codexSessions.js');
 const { needsCmdWrap, parseCmdShim, tokenizeCmdLine, resolveLauncher } = require('../shared/winWrap.js');
 const claudeResolve = require('../shared/claudeResolve.js');
 const { StreamJsonParser } = require('../shared/streamJson.js');
@@ -186,7 +188,7 @@ check('run-view config props declared',
   !!cfgProps['agentyard.claudePermissionMode']);
 check('claudePermissionMode default is not a skip-permissions mode',
   cfgProps['agentyard.claudePermissionMode'].default === 'default');
-check('package version is 1.0.2', pkg.version === '1.0.2', pkg.version);
+check('package version is 1.1.0', pkg.version === '1.1.0', pkg.version);
 
 // --- 5b. v0.5 terminal: manifest wiring ---------------------------------
 check('runView config prop: enum terminal|headless, default terminal',
@@ -244,14 +246,14 @@ check('xterm.js is a self-contained UMD build (no bundler, CSP-safe)',
   check('terminal: pty spawns via node-pty with an argv array (no shell string)',
     /nodePty\.spawn\(\s*target\.file,\s*target\.args,/.test(extSrc));
   check('terminal: pty command resolved through the winWrap no-cmd.exe path',
-    /function resolvePtyClaude/.test(extSrc) &&
+    /function resolvePtyCli/.test(extSrc) &&
     /needsCmdWrap\(cand, process\.platform\)/.test(extSrc) &&
     /resolveWinLauncher\(cand\)/.test(extSrc) &&
     /candidateCommands\(command, process\.platform\)/.test(extSrc));
   check('terminal: node-pty require is guarded — activation never throws',
     /try\s*{[\s\S]{0,120}nodePty = require\(/.test(extSrc) && /nodePtyError/.test(extSrc));
-  check('terminal: pty killed on panel dispose (no orphan claude)',
-    /onDidDispose\(\(\)\s*=>\s*{[\s\S]{0,160}this\.term\.dispose\(\)/.test(extSrc) &&
+  check('terminal: pty killed on panel dispose (no orphan CLI)',
+    /onDidDispose\(\(\)\s*=>\s*{[\s\S]{0,200}this\.disposeTerms\(\)/.test(extSrc) &&
     /killTree\(ptyKillHandle\(pty\)/.test(extSrc));
   check('terminal: Run view falls back to headless when node-pty is missing',
     /runViewRequested === 'terminal' && ptyAvailable\)\s*\?\s*'terminal'\s*:\s*'headless'/.test(extSrc));
@@ -807,7 +809,7 @@ check('retainContextWhenHidden set',
 
 // --- 16. v1.0.0: manifest + extension wiring for clipboard/attach ----
 {
-  check('manifest: version is exactly 1.0.2', pkg.version === '1.0.2');
+  check('manifest: version is exactly 1.1.0', pkg.version === '1.1.0');
   check('manifest: keywords include "claude code" and "terminal"',
     Array.isArray(pkg.keywords) && pkg.keywords.includes('claude code') && pkg.keywords.includes('terminal'));
   check('manifest: galleryBanner is set (dark, #1e1e2e)',
@@ -1273,8 +1275,10 @@ check('retainContextWhenHidden set',
     check('manifest: command ' + c + ' declared', cmds22.includes(c));
   }
   const props22 = Object.keys((((pkg.contributes || {}).configuration || {}).properties) || {});
-  check('manifest: v1.0.2 adds no new settings key',
-    props22.length === 16 && !props22.some((k) => /onboard/i.test(k)), props22.length + ' keys');
+  check('manifest: v1.1 settings keys (16 prior + agents/codexPath/codexExtraArgs)',
+    props22.length === 19 &&
+    ['agentyard.agents', 'agentyard.codexPath', 'agentyard.codexExtraArgs'].every((k) => props22.includes(k)),
+    props22.length + ' keys');
 
   // -- bundled first-run content --------------------------------------
   const starterDir = path.join(EXT_ROOT, 'media', 'starter-agents');
@@ -1310,6 +1314,170 @@ check('retainContextWhenHidden set',
     /js\/onboard\.js/.test(idxHtml22));
   check('extension: getHtml wires the "?" button, overlay and onboard.js too',
     /id="help-btn"/.test(extSrc) && /id="ay-overlay"/.test(extSrc) && /'js\/onboard\.js'/.test(extSrc));
+}
+
+// --- 23. v1.1: multi-agent (Claude Code + Codex) ----------------------
+{
+  const extSrc = fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8');
+  const termSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'term.js'), 'utf8');
+  const idxHtml = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'index.html'), 'utf8');
+  const cp23 = (((pkg.contributes || {}).configuration || {}).properties) || {};
+  const cmds23 = ((pkg.contributes || {}).commands || []).map((c) => c.command);
+
+  // -- manifest ---------------------------------------------------------
+  check('v1.1 manifest: agentyard.agents defaults to ["claude-code"], enum claude-code|codex',
+    JSON.stringify(cp23['agentyard.agents'].default) === JSON.stringify(['claude-code']) &&
+    JSON.stringify(cp23['agentyard.agents'].items.enum) === JSON.stringify(['claude-code', 'codex']));
+  check('v1.1 manifest: agentyard.codexPath defaults to "codex"',
+    cp23['agentyard.codexPath'] && cp23['agentyard.codexPath'].default === 'codex');
+  check('v1.1 manifest: agentyard.codexExtraArgs defaults to []',
+    cp23['agentyard.codexExtraArgs'] && JSON.stringify(cp23['agentyard.codexExtraArgs'].default) === '[]');
+  check('v1.1 manifest: new commands openCodexTerminal + setupGuidelines declared',
+    cmds23.includes('agentyard.openCodexTerminal') && cmds23.includes('agentyard.setupGuidelines'));
+  check('v1.1 manifest: keywords include codex + agents.md, description stays neutral (no comparison)',
+    pkg.keywords.includes('codex') && pkg.keywords.includes('agents.md') &&
+    !/\b(replaces?|better than|instead of|superior)\b/i.test(pkg.description));
+
+  // -- buildInteractiveCodexArgs: a real TTY, not headless -------------
+  {
+    const c0 = buildInteractiveCodexArgs({});
+    check('codexArgs: default command is "codex", no headless flags',
+      c0.command === 'codex' &&
+      !c0.args.includes('-p') && !c0.args.includes('--json') && !c0.args.includes('--output-format'));
+    const cx = buildInteractiveCodexArgs({
+      codexPath: 'codex.cmd',
+      extraArgs: ['--model', 'o3', '', 'x', 42],
+    });
+    check('codexArgs: codexPath honoured, extra args verbatim + in order, non-strings dropped',
+      cx.command === 'codex.cmd' && cx.args.join(' ') === '--model o3 x');
+    check('codexArgs: no permission/sandbox flags mapped by default',
+      buildInteractiveCodexArgs({ extraArgs: [] }).args.length === 0);
+    check('codexArgs: a hostile string stays one argv element',
+      buildInteractiveCodexArgs({ extraArgs: ['a" & rm -rf /'] }).args[0] === 'a" & rm -rf /');
+  }
+
+  // -- shared/codexSessions.js: rollout JSONL -> normalised events -----
+  {
+    const raw = fs.readFileSync(path.join(DD, 'codex-rollout.jsonl'), 'utf8');
+    let evs;
+    let threw = false;
+    try { evs = codexSessions.normalize(raw.split('\n')); } catch (e) { threw = true; }
+    check('codexSessions: a malformed line is skipped, never throws', !threw && Array.isArray(evs));
+    const meta = evs[0];
+    check('codexSessions: session_meta -> session id + cwd (+ model)',
+      meta && meta.kind === 'meta' && meta.source === 'codex' &&
+      meta.session_id === 'codex-demo-0001' && meta.cwd === '/demo/workspace/widget-shop');
+    check('codexSessions: task_started / a shell call become activity events',
+      evs.some((e) => e.kind === 'activity' && e.doing === 'working') &&
+      evs.some((e) => e.kind === 'activity' && e.doing === 'shell: npm test --silent'));
+    check('codexSessions: task_complete -> an ended event', (() => {
+      const last = evs[evs.length - 1];
+      return last && last.kind === 'ended' && last.ended === true;
+    })());
+    check('codexSessions: the malformed line did not become an event',
+      evs.every((e) => !e.doing || !/not json/i.test(e.doing)) &&
+      evs.length === 5);
+    check('codexSessions: session_id is carried forward onto later lines',
+      evs.every((e) => e.session_id === 'codex-demo-0001'));
+    check('codexSessions: an error payload -> a blocked event',
+      codexSessions.parseLine('{"type":"event_msg","payload":{"type":"error","message":"boom"}}').kind === 'blocked');
+  }
+
+  // -- shared/guidelines.js: canonical AGENTS.md, CLAUDE.md as a pointer
+  {
+    const G = guidelines;
+    const starter = fs.readFileSync(path.join(EXT_ROOT, 'media', 'starter-guidelines', 'AGENTS.md'), 'utf8');
+    check('guidelines: bundled starter AGENTS.md renders, generic, no comparison language',
+      /# Project/.test(starter) && /Build, test, lint/.test(starter) &&
+      !/\bWONKYARD\b/.test(starter) &&
+      !/\b(replace|better than|instead of)\b/i.test(starter));
+    check('guidelines: pointer text is exactly the @AGENTS.md import + a one-line comment',
+      G.pointerText().split('\n').filter(Boolean).length === 2 &&
+      G.pointerText().split('\n')[0].trim() === '@AGENTS.md' &&
+      /^<!--.*-->$/.test(G.pointerText().split('\n')[1].trim()) &&
+      G.isPointer(G.pointerText()));
+    check('guidelines: a real CLAUDE.md is NOT a pointer', !G.isPointer('# My project\n\nlots of real guidance here\n'));
+    check('guidelines: classify returns the 4 sync labels',
+      G.classify({ agentsMd: true, claudeMd: true, claudeText: G.pointerText() }) === 'in-sync' &&
+      G.classify({ agentsMd: true, claudeMd: true, claudeText: '# real\ncontent' }) === 'diverged' &&
+      G.classify({ agentsMd: true, claudeMd: false }) === 'only-agents' &&
+      G.classify({ agentsMd: false, claudeMd: true, claudeText: '# real' }) === 'only-claude' &&
+      G.classify({ agentsMd: false, claudeMd: false }) === 'n/a');
+    check('guidelines: an appended @AGENTS.md import reads as in-sync, keeps the body',
+      (() => {
+        const t = G.appendImportText('# keep me\n\nreal content');
+        return /# keep me/.test(t) && /real content/.test(t) && G.hasImport(t) &&
+          G.classify({ agentsMd: true, claudeMd: true, claudeText: t }) === 'in-sync';
+      })());
+    check('guidelines: plan — neither file exists -> create (+ CLAUDE.md pointer when Claude enabled)',
+      G.plan({ agentsMd: false, claudeMd: false, claudeEnabled: true }).action === 'create' &&
+      G.plan({ agentsMd: false, claudeMd: false, claudeEnabled: true }).createClaudePointer === true &&
+      G.plan({ agentsMd: false, claudeMd: false, claudeEnabled: false }).createClaudePointer === false);
+    check('guidelines: plan — a real CLAUDE.md is in the way -> offer the 3 choices, never overwrite',
+      (() => {
+        const p = G.plan({ agentsMd: false, claudeMd: true, claudeText: '# real content', claudeEnabled: true });
+        return p.action === 'choose' &&
+          JSON.stringify(p.choices) === JSON.stringify(['keep-separate', 'append-import', 'make-pointer']);
+      })());
+    check('guidelines: make-pointer moves the CLAUDE.md body into AGENTS.md',
+      (() => {
+        const merged = G.mergedAgentsText('# existing agents', '# from claude\nkeep this');
+        return /# existing agents/.test(merged) && /from claude/.test(merged) && /keep this/.test(merged);
+      })());
+  }
+
+  // -- extension.js wiring -------------------------------------------
+  check('v1.1 extension: enabledAgents() defaults to claude-code, validates against KNOWN_AGENTS',
+    /function enabledAgents\(/.test(extSrc) && /KNOWN_AGENTS = \['claude-code', 'codex'\]/.test(extSrc));
+  check('v1.1 extension: one TerminalRun per backend (a Map), disposed together',
+    /this\.terms = new Map\(\)/.test(extSrc) && /disposeTerms\(\)/.test(extSrc) &&
+    /new TerminalRun\(\([\s\S]{0,80}, backend\)/.test(extSrc));
+  check('v1.1 extension: term messages route by backend id',
+    /this\.termFor\(msg\.backend \|\| enabledAgents\(\)\[0\]\)/.test(extSrc));
+  check('v1.1 extension: the no-cmd.exe guarantee is applied for BOTH CLIs (one resolver)',
+    /function resolvePtyCli\(command, baseArgs\)/.test(extSrc) &&
+    /buildInteractiveArgs\(cfg\)/.test(extSrc));
+  check('v1.1 extension: AY_CONFIG carries the enabled agents list',
+    /agents: \$\{JSON\.stringify\(enabledAgents\(\)\)\}/.test(extSrc));
+  check('v1.1 extension: openCodexTerminal + setupGuidelines commands registered',
+    /registerCommand\('agentyard\.openCodexTerminal'/.test(extSrc) &&
+    /registerCommand\('agentyard\.setupGuidelines'/.test(extSrc));
+  check('v1.1 extension: guideline writes back up to .agentyard-backup first (never clobber)',
+    /copyFileSync\(p, p \+ '\.agentyard-backup'\)/.test(extSrc) && /guidelines\.plan\(/.test(extSrc));
+  check('v1.1 extension: roster is decoupled from company.db (missing db is not an error)',
+    /hasRoster/.test(extSrc) && !/return \{ type: 'data', error: 'cannot read '/.test(extSrc));
+  check('v1.1 extension: codex install dir added to the PATH probe',
+    /'\.codex', 'bin'/.test(fs.readFileSync(path.join(EXT_ROOT, 'shared', 'claudeResolve.js'), 'utf8')));
+
+  // -- webview -----------------------------------------------------
+  check('v1.1 term.js: reads AY_CONFIG.agents, one xterm per backend, a switcher',
+    /cfg\.agents/.test(termSrc) && /run-backend-switch/.test(termSrc) &&
+    /backends\.set\(/.test(termSrc) && /adapter\.termAttach\(activeId/.test(termSrc));
+  check('v1.1 term.js: still wires attachCustomKeyEventHandler to termclip.keyHandler (per backend)',
+    /attachCustomKeyEventHandler\(\(e\) => clip\.keyHandler\(e, clipIo\)\)/.test(termSrc));
+  check('v1.1 index.html: carries the __AY_AGENTS__ token + a run-backend-switch element',
+    idxHtml.includes('__AY_AGENTS__') && /id="run-backend-switch"/.test(idxHtml));
+  check('v1.1 dev-server: stubs the backend list from AGENTYARD_AGENTS',
+    /AGENTYARD_AGENTS/.test(fs.readFileSync(path.join(EXT_ROOT, 'scripts', 'dev-server.mjs'), 'utf8')) &&
+    /__AY_AGENTS__/.test(fs.readFileSync(path.join(EXT_ROOT, 'scripts', 'dev-server.mjs'), 'utf8')));
+
+  // -- friendlySpawnMessage is CLI-agnostic --------------------------
+  check('claudeResolve.friendlySpawnMessage: codex descriptor -> codexPath + codex docs',
+    (() => {
+      const m = claudeResolve.friendlySpawnMessage({ message: 'ENOENT' }, 'codex', 'linux', 'codex');
+      return /agentyard\.codexPath/.test(m) && /which codex/.test(m) && !/claudePath/.test(m);
+    })());
+  check('claudeResolve.friendlySpawnMessage: still defaults to Claude Code when no cli given',
+    /agentyard\.claudePath/.test(claudeResolve.friendlySpawnMessage({ code: 'ENOENT' }, 'claude', 'darwin')));
+}
+
+// --- 24. v1.1: .vscodeignore ships the bundled guideline starter ------
+{
+  const vsig = fs.readFileSync(path.join(EXT_ROOT, '.vscodeignore'), 'utf8');
+  check('.vscodeignore: does not exclude media/starter-guidelines',
+    !/^media\/starter-guidelines/m.test(vsig) && !/^media\/\*\*\s*$/m.test(vsig));
+  check('bundled: media/starter-guidelines/AGENTS.md exists',
+    fs.existsSync(path.join(EXT_ROOT, 'media', 'starter-guidelines', 'AGENTS.md')));
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

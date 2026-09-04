@@ -34,10 +34,22 @@
     }
   }
 
+  function hasTable(db, table) {
+    try {
+      return rows(db, `SELECT name FROM sqlite_master WHERE type='table' AND name='${table}'`).length > 0;
+    } catch (e) {
+      return false;
+    }
+  }
+
   async function read(bytes, wasmUrl) {
+    // v1.1: no company.db (or an empty one) is not an error — the roster and
+    // live activity drive the scene; the board / annex layers just stay empty.
+    if (!bytes || !bytes.length) return { projects: [], statuses: [] };
     const SQL = await init(wasmUrl);
     const db = new SQL.Database(bytes);
     try {
+      if (!hasTable(db, 'projects')) return { projects: [], statuses: [] };
       const localPath = hasColumn(db, 'projects', 'local_path') ? ', local_path' : '';
       const projects = rows(
         db,

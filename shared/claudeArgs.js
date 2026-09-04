@@ -96,6 +96,33 @@ function buildInteractiveClaudeArgs(opts) {
 }
 
 /**
+ * Builds the argv for an INTERACTIVE `codex` session — the Run view's embedded
+ * terminal running Codex instead of Claude Code. Like `buildInteractiveClaudeArgs`
+ * this is a real TTY, so there is NO `-p` / `--json` / `--output-format`: Codex
+ * renders its own TUI and the user answers prompts in the panel.
+ *
+ * Codex uses a different permission / sandbox model, so Agentyard does NOT map
+ * any of those flags by default — anything needed is passed verbatim through
+ * `agentyard.codexExtraArgs`. Pure: the extension does the spawn (via node-pty),
+ * the sanity test exercises this directly.
+ *
+ * @param {object} opts
+ * @param {string} [opts.codexPath]   configured binary name/path (default "codex")
+ * @param {string[]} [opts.extraArgs] verbatim extra argv, appended in order
+ * @returns {{command:string, args:string[]}}
+ */
+function buildInteractiveCodexArgs(opts) {
+  opts = opts || {};
+  const args = [];
+  const extra = Array.isArray(opts.extraArgs) ? opts.extraArgs : [];
+  for (const a of extra) {
+    if (typeof a === 'string' && a.length) args.push(a);
+  }
+  const command = cleanStr(opts.codexPath) || 'codex';
+  return { command, args };
+}
+
+/**
  * Ordered list of executables to try for a bare command name. On Windows an
  * npm-installed CLI is usually `<name>.cmd`; a native install is `<name>.exe`.
  * If the caller already gave an explicit extension or a path separator we trust
@@ -112,4 +139,10 @@ function candidateCommands(command, platform) {
   return hasSep ? [base].concat(list.filter((x) => x !== base)) : list;
 }
 
-module.exports = { PERMISSION_MODES, buildClaudeArgs, buildInteractiveClaudeArgs, candidateCommands };
+module.exports = {
+  PERMISSION_MODES,
+  buildClaudeArgs,
+  buildInteractiveClaudeArgs,
+  buildInteractiveCodexArgs,
+  candidateCommands,
+};
