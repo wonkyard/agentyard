@@ -1,0 +1,8 @@
+{"timestamp":"2026-09-03T10:00:00.000Z","type":"session_meta","payload":{"id":"codex-demo-0001","cwd":"/demo/workspace/widget-shop","model":"codex-demo","originator":"cli"}}
+{"timestamp":"2026-09-03T10:00:01.000Z","type":"turn_context","payload":{"type":"turn_context","approval_policy":"on-request"}}
+{"timestamp":"2026-09-03T10:00:02.000Z","type":"event_msg","payload":{"type":"task_started"}}
+{"timestamp":"2026-09-03T10:00:03.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","command":"npm test --silent"}}
+{"timestamp":"2026-09-03T10:00:05.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Tests pass — 12 green."}}
+{"timestamp":"2026-09-03T10:00:06.000Z","type":"event_msg","payload":{"type":"token_count","input":1200,"output":340}}
+this line is not json and must be skipped without throwing
+{"timestamp":"2026-09-03T10:00:07.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"done"}}

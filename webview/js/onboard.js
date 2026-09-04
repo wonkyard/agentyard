@@ -89,7 +89,14 @@
     const banner = doc.getElementById('office-banner');
     if (!overlay || !card) return;
 
-    let state = { onboarded: !!cfg.onboarded, starters: [], claude: null, hasWorkspace: false };
+    let state = {
+      onboarded: !!cfg.onboarded,
+      starters: [],
+      claude: null,
+      codex: null,
+      agents: Array.isArray(cfg.agents) && cfg.agents.length ? cfg.agents.slice() : ['claude-code'],
+      hasWorkspace: false,
+    };
     let topics = [];
     let shownThisSession = false;
     let lastData = null;
@@ -209,7 +216,7 @@
         steps.textContent = '';
         nav.textContent = '';
         steps.appendChild(el('div', 'ay-wiz-dots', '단계 ' + step + ' / 3'));
-        if (step === 1) paintClaude(steps);
+        if (step === 1) paintAgentsPicker(steps);
         else if (step === 2) paintAgents(steps);
         else paintDone(steps);
 
@@ -226,37 +233,54 @@
         }
       }
 
-      function paintClaude(host) {
-        host.appendChild(el('h3', null, '1. Claude Code CLI'));
-        const c = state.claude || {};
-        const found = !!c.resolved;
-        const p = el('p', null, found
-          ? '찾았어요: ' + c.resolved + (c.shebang ? '  (node 스크립트 — VS Code 내장 Node로 실행)' : '')
-          : '아직 "' + (c.command || 'claude') + '" 를 찾지 못했어요.');
-        p.className = found ? 'ay-ok' : 'ay-warn';
-        host.appendChild(p);
-        if (!found) {
-          host.appendChild(el('p', null,
-            '설치가 안 돼 있으면 아래 링크를 참고하세요. 이미 설치했다면 일반 터미널에서 ' +
-            '`which claude` (Windows: `where claude`) 결과 경로를 넣어 주세요.'));
-          const row = el('div', 'ay-inline-row');
-          const inp = el('input', 'ay-input');
-          inp.type = 'text';
-          inp.placeholder = '/path/to/claude';
-          inp.value = c.command && c.command !== 'claude' ? c.command : '';
-          row.appendChild(inp);
-          row.appendChild(mkBtn('저장 후 다시 확인', () => {
-            adapter.sendMsg({ type: 'onboard', action: 'setClaudePath', path: inp.value });
-          }));
-          host.appendChild(row);
-          const link = el('p');
-          link.innerHTML = '<a href="#" data-ext="https://docs.anthropic.com/claude-code">Claude Code 설치 문서</a>';
-          host.appendChild(link);
-          host.appendChild(mkBtn('다시 감지', () => adapter.sendMsg({ type: 'onboard', action: 'detectClaude' })));
+      function paintAgentsPicker(host) {
+        host.appendChild(el('h3', null, '1. 어떤 코딩 에이전트를 쓰나요?'));
+        host.appendChild(el('p', null,
+          '하나 이상 고르세요. Codex 는 AGENTS.md 를, Claude Code 는 CLAUDE.md 를 읽어요. ' +
+          '나중에 설정(agentyard.agents)에서 바꿀 수 있어요.'));
+        const OPTS = [
+          { id: 'claude-code', label: 'Claude Code', diag: state.claude, bin: 'claude' },
+          { id: 'codex', label: 'Codex', diag: state.codex, bin: 'codex' },
+        ];
+        const list = el('div', 'ay-starter-list');
+        const boxes = [];
+        for (const o of OPTS) {
+          const label = el('label', 'ay-starter');
+          const cb = doc.createElement('input');
+          cb.type = 'checkbox';
+          cb.value = o.id;
+          cb.checked = state.agents.indexOf(o.id) !== -1;
+          cb.dataset.id = o.id;
+          boxes.push(cb);
+          label.appendChild(cb);
+          label.appendChild(el('span', 'ay-starter-name', o.label));
+          const d = o.diag || {};
+          const foundLine = d.resolved
+            ? el('span', 'ay-starter-desc ay-ok', '찾음: ' + d.resolved)
+            : el('span', 'ay-starter-desc ay-warn', '"' + (d.command || o.bin) + '" 를 PATH 에서 못 찾음');
+          label.appendChild(foundLine);
+          list.appendChild(label);
         }
+        host.appendChild(list);
+        const save = () => {
+          const picked = boxes.filter((b) => b.checked).map((b) => b.value);
+          state.agents = picked.length ? picked : ['claude-code'];
+          adapter.sendMsg({ type: 'onboard', action: 'setAgents', agents: state.agents });
+        };
+        for (const b of boxes) b.addEventListener('change', save);
+        const row = el('div', 'ay-help-actions');
+        row.appendChild(mkBtn('다시 감지', () => adapter.sendMsg({ type: 'onboard', action: 'detectClis' })));
+        host.appendChild(row);
       }
 
       function paintAgents(host) {
+        if (state.agents.indexOf('claude-code') === -1) {
+          host.appendChild(el('h3', null, '2. 부서(에이전트) 파일'));
+          host.appendChild(el('p', null,
+            'Codex 는 부서(에이전트)별 파일이 없어요 — 여기서 만들 게 없습니다. ' +
+            '지침은 마지막 단계에서 AGENTS.md 로 만들 수 있어요.'));
+          return;
+        }
         host.appendChild(el('h3', null, '2. 부서(에이전트) 만들기'));
         host.appendChild(el('p', null,
           '부서는 ~/.claude/agents/<이름>.md 파일이에요. 아래에서 골라 시작하고, 나중에 파일을 열어 고치면 됩니다.'));
@@ -287,11 +311,16 @@
       }
 
       function paintDone(host) {
-        host.appendChild(el('h3', null, '3. 준비 끝!'));
+        host.appendChild(el('h3', null, '3. 지침 파일 (AGENTS.md)'));
+        host.appendChild(el('p', null,
+          'AGENTS.md 하나를 기준 문서로 두고, Claude Code 를 함께 쓰면 CLAUDE.md 는 ' +
+          '"@AGENTS.md" 한 줄로 이어 붙여 동기화해요. 기존 CLAUDE.md 는 절대 덮어쓰지 않고 ' +
+          '먼저 백업합니다.'));
+        host.appendChild(mkBtn('지침 파일 설정', () => {
+          adapter.sendMsg({ type: 'ui', action: 'setupGuidelines' });
+        }, true));
         const made = (lastCreated && lastCreated.results || []).filter((r) => r.state === 'created').length;
-        host.appendChild(el('p', null, made
-          ? '부서 ' + made + '개를 만들었어요.'
-          : '언제든 부서를 추가할 수 있어요.'));
+        if (made) host.appendChild(el('p', null, '부서 ' + made + '개를 만들었어요.'));
         host.appendChild(el('p', null,
           '패널 헤더의 ? 를 누르면 이 안내와 자세한 도움말을 다시 볼 수 있어요. ' +
           '명령 팔레트의 "Agentyard: Setup Guide" 로도 열립니다.'));
@@ -320,9 +349,24 @@
       if (!banner) return;
       const demo = lastData.dataMode === 'demo';
       const rosterEmpty = !!lastData.rosterEmpty;
-      if (!demo && !rosterEmpty) { banner.hidden = true; banner.textContent = ''; return; }
+      const gl = lastData.guideline || {};
+      const noGuideline = !demo && lastData.hasWorkspace &&
+        gl.agentsMd === 'absent' && gl.claudeMd === 'absent';
+      if (!demo && !rosterEmpty && !noGuideline) { banner.hidden = true; banner.textContent = ''; return; }
       banner.textContent = '';
       banner.hidden = false;
+      if (!demo && !rosterEmpty && noGuideline) {
+        banner.className = 'ay-banner ay-banner-empty';
+        banner.appendChild(el('b', null, '지침 파일이 없어요'));
+        banner.appendChild(el('span', null,
+          '코딩 에이전트가 읽을 AGENTS.md 를 만들어 두면 좋아요. CLAUDE.md 도 함께 동기화됩니다.'));
+        const a = el('span', 'ay-banner-actions');
+        a.appendChild(mkBtn('지침 파일 만들기',
+          () => adapter.sendMsg && adapter.sendMsg({ type: 'ui', action: 'setupGuidelines' }), true));
+        a.appendChild(mkBtn('자세히', () => showHelp('data')));
+        banner.appendChild(a);
+        return;
+      }
       if (rosterEmpty) {
         banner.className = 'ay-banner ay-banner-empty';
         banner.appendChild(el('b', null, '아직 부서가 없어요'));
@@ -348,6 +392,8 @@
           if (typeof msg.onboarded === 'boolean') state.onboarded = msg.onboarded;
           if (msg.starters) state.starters = msg.starters;
           if (msg.claude) state.claude = msg.claude;
+          if (msg.codex) state.codex = msg.codex;
+          if (Array.isArray(msg.agents)) state.agents = msg.agents.slice();
           if (typeof msg.hasWorkspace === 'boolean') state.hasWorkspace = msg.hasWorkspace;
           if (!state.onboarded && !shownThisSession) showWizard(false);
           if (wizardRepaint && !overlay.hidden) wizardRepaint();
@@ -355,6 +401,11 @@
           showWizard(!!msg.force);
         } else if (msg.event === 'claude') {
           state.claude = msg.claude || state.claude;
+          if (wizardRepaint && !overlay.hidden) wizardRepaint();
+        } else if (msg.event === 'clis') {
+          if (msg.claude) state.claude = msg.claude;
+          if (msg.codex) state.codex = msg.codex;
+          if (Array.isArray(msg.agents)) state.agents = msg.agents.slice();
           if (wizardRepaint && !overlay.hidden) wizardRepaint();
         } else if (msg.event === 'created') {
           lastCreated = msg.result || null;

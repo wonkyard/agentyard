@@ -123,6 +123,8 @@ html, body {
 }
 #run-term[hidden] { display: none; }
 #run-term .xterm { height: 100%; }
+/* one surface per enabled backend; term.js display:none's the inactive ones */
+.run-term-surface { height: 100%; }
 #run-term-foot {
   flex: 0 0 auto;
   display: flex;
@@ -133,6 +135,28 @@ html, body {
   padding: 5px 8px;
 }
 #run-term-foot[hidden] { display: none; }
+/* Claude Code / Codex switcher — only shown when >1 backend is enabled */
+#run-backend-switch {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+#run-backend-switch[hidden] { display: none; }
+#run-backend-switch button {
+  background: transparent;
+  border: 0;
+  color: var(--dim);
+  font: inherit;
+  font-size: 9px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+#run-backend-switch button.on {
+  background: #2ec4b6;
+  color: #0d0f16;
+  font-weight: 700;
+}
 #run-term-new {
   background: transparent;
   color: var(--dim);

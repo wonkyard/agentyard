@@ -2,6 +2,48 @@
 
 All notable changes to Agentyard are recorded here.
 
+## 1.1.0
+
+Agentyard is no longer Claude-Code-only. Everything is additive and
+backward-compatible: an existing install stays exactly as it was until you
+change `agentyard.agents`.
+
+- **Coding-agent backends.** A new `agentyard.agents` setting (default
+  `["claude-code"]`; items `claude-code` | `codex`) chooses which agents
+  Agentyard works with. The first-run wizard step 1 is now a picker with a
+  "found / not found" line per CLI; a fresh install with only Codex on PATH
+  defaults to Codex, both present enables both. New settings
+  `agentyard.codexPath` (default `codex`) and `agentyard.codexExtraArgs`
+  (verbatim — Agentyard maps no Codex permission/sandbox flags).
+- **Run view: per-backend terminal + switcher.** With more than one backend
+  enabled the Run view gets a `Claude Code | Codex` segmented control. Each
+  backend has its own xterm instance and its own pty in the extension host, so
+  switching never restarts a session and each keeps its scrollback. One backend
+  → unchanged. The v0.4 no-`cmd.exe` guarantee (argv array, no shell, a Windows
+  `.cmd`/`.bat` resolved to the real exe or refused) now applies to both CLIs.
+  New command **Agentyard: Open Codex Terminal**.
+- **Agent guidelines.** New command **Agentyard: Set Up Agent Guidelines**.
+  `AGENTS.md` is canonical (Codex reads it directly); `CLAUDE.md` is kept in
+  sync as a one-line `@AGENTS.md` import so both agents see the same
+  instructions with zero drift. An existing `CLAUDE.md` is **never** clobbered —
+  you get keep-separate / append-import / make-pointer, every write confirmed
+  and backed up to `.agentyard-backup` first (same discipline as the
+  settings.json hook merge). A bundled, generic `AGENTS.md` starter ships in the
+  `.vsix`.
+- **Generality: the roster is decoupled from `company.db`.** A workspace is
+  "real data" mode when a roster exists — workspace `.claude/agents/`,
+  `~/.claude/agents/`, or any recent live activity. `company.db` missing just
+  leaves the board / annex layers empty; it is no longer a hard requirement or
+  an error. The empty-state banner also offers to create a guideline file.
+- Codex session transcripts (`~/.codex/sessions/**/rollout-*.jsonl`) have a
+  pure normaliser (`shared/codexSessions.js`) ready for the office-scene live
+  rooms — wiring lands in a v1.2 follow-up.
+
+Deferred to **v1.2**: Codex live rooms in the office scene (tailing
+`~/.codex/sessions/**`) and a headless Codex Run view (`codex exec --json`).
+Until then, use the terminal Run view for Codex; the headless feed stays Claude
+Code only.
+
 ## 1.0.2
 
 First-run experience and `claude` launch robustness — driven by an external

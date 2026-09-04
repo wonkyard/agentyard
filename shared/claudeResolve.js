@@ -39,6 +39,7 @@ function commonBinDirs(homedir, platform) {
       j('AppData', 'Local', 'Microsoft', 'WinGet', 'Links'),
       j('scoop', 'shims'),
       j('.local', 'bin'),
+      j('.codex', 'bin'),                             // Codex CLI
     ];
   }
   return [
@@ -52,6 +53,7 @@ function commonBinDirs(homedir, platform) {
     j('.volta', 'bin'),          // volta shims
     j('.asdf', 'shims'),         // asdf shims
     j('.nvm', 'current', 'bin'), // nvm "current" symlink, when present
+    j('.codex', 'bin'),          // Codex CLI
     '/usr/bin',
     '/bin',
   ];
@@ -160,20 +162,34 @@ function nodeShebangTarget(target, io) {
 
 /**
  * A recognised failed-to-exec error → an actionable, Korean-first message. Used
- * verbatim at both spawn sites instead of leaking `posix_spawnp failed.`.
+ * verbatim at every spawn site instead of leaking `posix_spawnp failed.`.
+ *
+ * CLI-agnostic: `cli` names which coding-agent backend failed so the message
+ * points at the right setting and docs. Called with a string (legacy) or a
+ * descriptor; a missing `cli` defaults to Claude Code so old call sites are
+ * unchanged.
  *
  * @param {Error|{code?:string,message?:string}} err
- * @param {string} command  the configured claude command, for the message
+ * @param {string} command  the configured CLI command, for the message
  * @param {string} platform process.platform
+ * @param {string|{name?:string,bin?:string,setting?:string,docsUrl?:string}} [cli]
  * @returns {string}
  */
-function friendlySpawnMessage(err, command, platform) {
-  const which = platform === 'win32' ? 'where claude' : 'which claude';
+function friendlySpawnMessage(err, command, platform, cli) {
+  const known = {
+    'claude-code': { bin: 'claude', setting: 'agentyard.claudePath', docsUrl: 'https://docs.anthropic.com/claude-code' },
+    codex: { bin: 'codex', setting: 'agentyard.codexPath', docsUrl: 'https://github.com/openai/codex' },
+  };
+  const d = (typeof cli === 'string' ? known[cli] : cli) || known['claude-code'];
+  const bin = d.bin || 'claude';
+  const setting = d.setting || 'agentyard.claudePath';
+  const docsUrl = d.docsUrl || 'https://docs.anthropic.com/claude-code';
+  const which = (platform === 'win32' ? 'where ' : 'which ') + bin;
   const raw = (err && (err.message || err.code)) ? String(err.message || err.code) : String(err);
   return (
-    'Agentyard가 "' + (command || 'claude') + '" 를 실행하지 못했어요.\n' +
-    '일반 터미널에서 `' + which + '` 결과를 설정의 agentyard.claudePath 에 넣어 주세요.\n' +
-    '설치가 안 돼 있으면 https://docs.anthropic.com/claude-code 를 참고하세요.\n' +
+    'Agentyard가 "' + (command || bin) + '" 를 실행하지 못했어요.\n' +
+    '일반 터미널에서 `' + which + '` 결과를 설정의 ' + setting + ' 에 넣어 주세요.\n' +
+    '설치가 안 돼 있으면 ' + docsUrl + ' 를 참고하세요.\n' +
     '(원본 오류: ' + raw + ')'
   );
 }

@@ -73,6 +73,11 @@ still gets a packaged `.vsix` on the Release); the run does not fail.
 The Run view's terminal (v0.5+) has one real maintenance cost: **`node-pty` is a
 native module and must match the Node/Electron ABI that VS Code runs.**
 
+Since v1.1 there can be **several pty instances at once — one per enabled backend**
+(`agentyard.agents`: Claude Code, Codex, …), each held in the extension host by
+its own `TerminalRun`. Same ABI requirement, just more instances; panel dispose
+kills them all (`OfficeViewProvider.disposeTerms`).
+
 - We depend on `@homebridge/node-pty-prebuilt-multiarch`, pinned exactly in
   `package.json`. It ships prebuilt binaries inside the npm package for many
   ABIs. xterm.js / addon-fit are pinned there too and vendored into

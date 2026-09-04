@@ -28,6 +28,12 @@ const DEMO_DIR = path.join(EXT_ROOT, 'dev-data');
 
 // AGENTYARD_REPO is the current name. PIXEL_OFFICE_REPO is still read as a
 // fallback for one version — deprecated, remove after 0.3.
+// The Run-view backend list the webview stubs from. AGENTYARD_AGENTS=claude-code,codex
+const DEV_AGENTS = (process.env.AGENTYARD_AGENTS || 'claude-code')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 const REPO_ENV = process.env.AGENTYARD_REPO || process.env.PIXEL_OFFICE_REPO;
 const REAL_ROOT = REPO_ENV ? path.resolve(REPO_ENV) : null;
 const DEMO = !REAL_ROOT;
@@ -135,7 +141,12 @@ function serveStatic(res, urlPath) {
     // scene header shows the real version (same source as the extension host).
     let body = buf;
     if (rel === 'index.html') {
-      body = Buffer.from(buf.toString('utf8').replace(/__AY_VERSION__/g, PKG_VERSION));
+      body = Buffer.from(
+        buf
+          .toString('utf8')
+          .replace(/__AY_VERSION__/g, PKG_VERSION)
+          .replace(/'__AY_AGENTS__'/g, JSON.stringify(DEV_AGENTS))
+      );
     }
     res.writeHead(200, {
       'Content-Type': MIME[path.extname(full)] || 'application/octet-stream',

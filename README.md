@@ -13,11 +13,34 @@ Built by the Founder for their own use while running an agent-driven company.
 
 *(screenshots use the bundled synthetic demo data, not a real company)*
 
+## Coding agents (Claude Code and Codex)
+
+Agentyard works with **Claude Code** and/or **Codex**. The `agentyard.agents`
+setting (default `["claude-code"]`) picks which; the first-run wizard offers a
+checkbox per CLI with a "found / not found" line. An existing install behaves
+exactly as before until you change it. Codex reads `AGENTS.md`; Claude Code
+reads `CLAUDE.md`. Settings: `agentyard.codexPath` (default `codex`),
+`agentyard.codexExtraArgs` (verbatim — Agentyard maps no Codex flags itself).
+
+### Keeping the guideline files in sync
+
+**Agentyard: Set Up Agent Guidelines** treats `AGENTS.md` as canonical and keeps
+`CLAUDE.md` as a one-line `@AGENTS.md` import, so both agents read the same
+instructions with zero drift. It ships a generic `AGENTS.md` starter. An
+existing `CLAUDE.md` is never overwritten — you choose keep-separate /
+append-import / make-pointer, and every write is confirmed and backed up to
+`.agentyard-backup` first.
+
 ## Run view
 
 A header toggle switches between the office scene and a **Run** view — a real
-embedded terminal running an interactive Claude Code session in the workspace
-folder, using your existing CLI login (no API key).
+embedded terminal running an interactive coding-agent session in the workspace
+folder, using your existing CLI login (no API key). With more than one backend
+enabled the Run view shows a `Claude Code | Codex` switcher; each backend keeps
+its own terminal, scrollback, and pty, so switching never restarts a session.
+**Agentyard: Open Codex Terminal** opens Codex in a normal VS Code terminal.
+(The headless feed — `agentyard.runView: headless` — is Claude Code only for
+now; a headless Codex runner is a v1.2 follow-up.)
 
 ![the run view](media/screenshots/run-view.png)
 
@@ -29,7 +52,8 @@ reloading the window leaves no orphan `claude` process.
 
 The terminal is [xterm.js](https://xtermjs.org) in the webview wired to a
 [node-pty](https://github.com/homebridge/node-pty-prebuilt-multiarch) pseudo-
-terminal in the extension host. node-pty is a native component; it ships with
+terminal in the extension host — one pty per enabled backend. node-pty is a
+native component; it ships with
 prebuilt binaries for **win32-x64, linux-x64, linux-arm64**. On a platform with
 no prebuilt binary the Run view falls back automatically to the older
 non-interactive feed (`claude -p … --output-format stream-json`) and shows a
@@ -63,11 +87,12 @@ Agentyard.
 
 ## First run
 
-The first time you open the panel, a short 3-step guide checks that the Claude
-Code CLI is found, offers to create starter departments (`research`,
-`engineering`, `growth`, a blank `_template`) in `~/.claude/agents/`, and points
-you at the header **?**. It runs once — reopen it any time with **Agentyard:
-Setup Guide**. If a room's terminal can't start `claude`, the notice now carries
+The first time you open the panel, a short 3-step guide asks which coding agents
+you use (Claude Code / Codex, with a found/not-found line for each), offers to
+create starter departments (`research`, `engineering`, `growth`, a blank
+`_template`) in `~/.claude/agents/` when Claude Code is enabled, and offers to
+set up `AGENTS.md`. It runs once — reopen it any time with **Agentyard: Setup
+Guide**. If a room's terminal can't start `claude`, the notice now carries
 buttons to open the `agentyard.claudePath` setting, run **Agentyard:
 Diagnostics**, or open the in-app Help. Agentyard also augments `PATH` with the
 usual install locations a GUI-launched editor misses and runs a `#!node` `claude`
