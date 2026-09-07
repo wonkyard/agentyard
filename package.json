@@ -2,7 +2,7 @@
   "name": "agentyard",
   "displayName": "Agentyard",
   "description": "A pixel-art view of your agent company, in the VS Code panel. Works with Claude Code and Codex.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "publisher": "wonkyard",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -90,6 +90,11 @@
       {
         "command": "agentyard.setupGuidelines",
         "title": "Set Up Agent Guidelines",
+        "category": "Agentyard"
+      },
+      {
+        "command": "agentyard.handoff",
+        "title": "Hand Off To The Other Agent",
         "category": "Agentyard"
       },
       {

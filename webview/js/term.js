@@ -45,6 +45,7 @@
     const attachBtn = document.getElementById('run-term-attach');
     const metaEl = document.getElementById('run-term-meta');
     const switchEl = document.getElementById('run-backend-switch');
+    const handoffEl = document.getElementById('run-handoff');
     const modelPickEl = document.getElementById('run-model-pick');
     const feedEl = document.getElementById('run-feed');
     const barEl = document.getElementById('run-bar');
@@ -158,6 +159,22 @@
       AY.modelpick.attach(modelPickEl, () => activeId);
     }
 
+    // v1.4: "이어받기" — always shown with >1 backend, quiet styling. Hands off
+    // FROM the other backend INTO the one currently on screen.
+    function otherId(id) {
+      return agents.filter((a) => a !== id)[0] || id;
+    }
+    function renderHandoff() {
+      if (!handoffEl) return;
+      if (agents.length < 2) { handoffEl.hidden = true; return; }
+      const other = otherId(activeId);
+      handoffEl.hidden = false;
+      handoffEl.textContent = '↔ ' + (LABEL[other] || other) + '에서 이어받기';
+      handoffEl.title = (LABEL[other] || other) +
+        ' 세션의 맥락을 .agentyard/HANDOFF.md 로 넘기고 ' +
+        (LABEL[activeId] || activeId) + ' 터미널에 이어서 프롬프트를 입력합니다.';
+    }
+
     function setActive(id) {
       if (!backends.has(id)) return;
       activeId = id;
@@ -167,6 +184,7 @@
           btn.classList.toggle('on', btn.dataset.backend === id);
         }
       }
+      renderHandoff();
       if (AY.modelpick && AY.modelpick.refresh) AY.modelpick.refresh();
       if (metaEl) {
         metaEl.textContent = 'interactive ' + (LABEL[id] || id) +
@@ -314,6 +332,31 @@
         if (!e) return;
         e.term.reset();
         adapter.termNew(activeId);
+      });
+    }
+
+    if (handoffEl) {
+      handoffEl.addEventListener('click', () => {
+        if (adapter.handoff) adapter.handoff(activeId);
+        else if (adapter.sendMsg) adapter.sendMsg({ type: 'handoff', to: activeId });
+      });
+    }
+    // The extension's prefill reply: bring the Run view forward, switch to `to`,
+    // and type the prompt into the pty WITHOUT a trailing newline (not submitted).
+    if (adapter.onMsg) {
+      adapter.onMsg((msg) => {
+        if (!msg || msg.type !== 'handoff' || msg.event !== 'prefillInput') return;
+        if (AY.showView) AY.showView('run');
+        if (msg.to && backends.has(msg.to)) setActive(msg.to);
+        const e = backends.get(activeId);
+        if (!e) return;
+        const wasAttached = e.attached;
+        fitActive();
+        const type = () => {
+          try { e.term.focus(); e.term.paste(String(msg.text || '')); } catch (err) { /* ignore */ }
+        };
+        if (wasAttached) type();
+        else root.setTimeout(type, 300);
       });
     }
 

@@ -1,0 +1,9 @@
+{"type":"session_meta","payload":{"id":"codex-demo-handoff","cwd":"/work/agentyard","originator":"vscode_extension","cli_version":"0.0.0"},"timestamp":"2026-09-05T09:00:00.000Z"}
+{"type":"response_item","payload":{"type":"message","role":"system","content":[{"type":"input_text","text":"You are Codex, a coding assistant."}]},"timestamp":"2026-09-05T09:01:00.000Z"}
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<user_instructions>Follow the repo AGENTS.md.</user_instructions>"}]},"timestamp":"2026-09-05T09:02:00.000Z"}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"help me wire the codex side of the handoff feature"}]},"timestamp":"2026-09-05T09:03:00.000Z"}
+{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"bash\",\"-lc\",\"npm run build\"]}","call_id":"c1"},"timestamp":"2026-09-05T09:04:00.000Z"}
+{"type":"event_msg","payload":{"type":"exec_command_begin","call_id":"c1","command":["bash","-lc","npm run build"],"cwd":"/work/agentyard"},"timestamp":"2026-09-05T09:05:00.000Z"}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"now update the app module"}]},"timestamp":"2026-09-05T09:06:00.000Z"}
+{"type":"event_msg","payload":{"type":"patch_apply_begin","call_id":"c2","auto_approved":true,"changes":{"src/app.js":{"update":{"unified_diff":"@@ -1 +1 @@"}}}},"timestamp":"2026-09-05T09:07:00.000Z"}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Build passes and src/app.js is updated.\n\nNext steps:\n- add the codex path to settings\n- add a sanity check for the codex fixture"}]},"timestamp":"2026-09-05T09:08:00.000Z"}

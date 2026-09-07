@@ -2,6 +2,37 @@
 
 All notable changes to Agentyard are recorded here.
 
+## 1.4.0
+
+Cross-agent handoff ("이어받기"). You work in one coding agent, hit a session
+limit, and want to keep going in the other one with the context intact — both
+directions. A shared context window is not possible, so the $0 realistic version
+is a **handoff brief**. Everything is additive — a Claude-Code-only install and
+the v1.3 run/office output are byte-for-byte unchanged.
+
+- **Pure digest builder (`shared/handoff.js`).** Given the outgoing agent's own
+  on-disk transcript (Claude Code `~/.claude/projects/**` or Codex
+  `~/.codex/sessions/**`), `buildHandoffDigest` extracts a fixed-shape Markdown
+  brief — goal / last ~20 requests, files touched (`Edit`/`Write`/`MultiEdit` and
+  Codex `patch_apply_begin`), commands run (`Bash` and Codex `exec_command_begin`),
+  where the agent left off, and any open checklist. No fs, no network, **no LLM
+  call** (same discipline as `shared/guidelines.js`). Deterministic; a malformed
+  line is skipped, never thrown on.
+- **`agentyard.handoff` command + a Run-view button.** On the backend-switcher row
+  of both the terminal and the headless feed, `↔ <other> 에서 이어받기` (only when
+  more than one backend is enabled). One click → guideline sync runs as a silent
+  step 0, the outgoing transcript is digested to `.agentyard/HANDOFF.md`, the Run
+  view switches to the incoming backend, and the first prompt is pre-filled asking
+  it to read the brief and restate its understanding before continuing. You review
+  the prompt and press Enter. A single-backend install registers the command as a
+  no-op with an info message.
+- **Guideline chip one-click (`guidelines.oneClickPlan`).** The `only-claude` chip
+  (`CLAUDE.md` exists, no `AGENTS.md`) now resolves in one modal confirm — it
+  copies `CLAUDE.md` into a canonical `AGENTS.md` and reduces `CLAUDE.md` to the
+  `@AGENTS.md` pointer, backing up any existing file first — instead of opening the
+  multi-step quick-pick. The standalone `Agentyard: Set Up Agent Guidelines`
+  command keeps its 3-choice flow.
+
 ## 1.3.0
 
 A per-backend model picker in the Run view. Additive and backward-compatible —

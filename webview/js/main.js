@@ -67,6 +67,10 @@
       if (btn) showView(btn.dataset.view);
     });
 
+    // v1.4: the handoff flow (run.js / term.js) needs to bring the Run view
+    // forward before it can pre-fill the input.
+    AY.showView = showView;
+
     // location.hash is a portable dev/debug + headless-screenshot affordance:
     // #run opens the Run view, #office (or empty) the Office view.
     const fromHash = () => {

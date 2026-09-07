@@ -113,6 +113,12 @@ function main() {
     cwd: firstString(e.cwd, e.workspace, e.project_dir) || null,
   };
 
+  // v1.4: the outgoing session's own transcript path, used by "이어받기" to build
+  // the handoff digest for whichever workspace this cwd belongs to. Local only —
+  // never sent anywhere, same as `cwd`.
+  const transcriptPath = firstString(e.transcript_path, e.transcriptPath);
+  if (transcriptPath) rec.transcript_path = transcriptPath;
+
   const agentId = firstString(e.agent_id, e.agentId, e.subagent_id);
   const agentType = firstString(e.agent_type, e.agentType, e.subagent_type);
   if (agentId) rec.agent_id = agentId;

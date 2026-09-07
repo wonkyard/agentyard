@@ -1,6 +1,7 @@
 .vscode/**
 .claude/**
 .github/**
+.agentyard/**
 node_modules/**
 scripts/**
 reports/**
