@@ -19,6 +19,8 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { toDepartments } = require('../shared/frontmatter.js');
 const { StreamJsonParser } = require('../shared/streamJson.js');
+const guidelines = require('../shared/guidelines.js');
+const codexSessions = require('../shared/codexSessions.js');
 const PKG_VERSION = require('../package.json').version;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -85,6 +87,33 @@ function readEvents() {
     if (!isNaN(m)) e.ts = new Date(m + shift).toISOString();
   }
   return { events, hooksInstalled: true };
+}
+
+// scope E: a synthetic Codex rollout stream for the browser office scene, only
+// when AGENTYARD_AGENTS includes codex. Timestamps shifted so the run reads as
+// "just now" (task_complete is stripped so the room stays live in the preview).
+function readCodexEvents() {
+  if (!DEV_AGENTS.includes('codex')) return [];
+  let raw;
+  try {
+    raw = fs.readFileSync(path.join(DEMO_DIR, 'codex-rollout.jsonl'), 'utf8');
+  } catch {
+    return [];
+  }
+  const evs = codexSessions.normalize(raw.split('\n')).filter((e) => e.kind !== 'ended');
+  const base = Date.now() - 4000;
+  return evs.map((e, i) => ({ ...e, ts: new Date(base + i * 500).toISOString() }));
+}
+
+// scope G: a stubbed guideline state so the header chip renders in the browser.
+function devGuideline() {
+  const sync = process.env.AGENTYARD_GUIDELINE || 'diverged';
+  return {
+    agentsMd: 'present',
+    claudeMd: sync === 'in-sync' ? 'pointer' : 'present',
+    sync,
+    chip: guidelines.chipState(sync, { claudeEnabled: DEV_AGENTS.includes('claude-code') }),
+  };
 }
 
 const PORT = Number(process.env.PORT || 4173);
@@ -165,10 +194,11 @@ const server = http.createServer((req, res) => {
         dataMode: DEMO ? 'demo' : 'workspace',
         departments: readAgentDir(DEPT_DIR),
         teamRoles: readAgentDir(TEAM_DIR),
+        guideline: devGuideline(),
       });
     }
     if (url.startsWith('/api/events')) {
-      return sendJson(res, readEvents());
+      return sendJson(res, { ...readEvents(), codexEvents: readCodexEvents() });
     }
     if (url.startsWith('/api/run-sample')) {
       // The run view needs a real child process (VS Code only). For browser

@@ -16,9 +16,10 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { toDepartments } = require('../shared/frontmatter.js');
 const hooksConfig = require('../shared/hooksConfig.js');
-const { buildClaudeArgs, buildInteractiveClaudeArgs, buildInteractiveCodexArgs, candidateCommands } = require('../shared/claudeArgs.js');
+const { buildClaudeArgs, buildInteractiveClaudeArgs, buildInteractiveCodexArgs, buildHeadlessCodexArgs, candidateCommands } = require('../shared/claudeArgs.js');
 const guidelines = require('../shared/guidelines.js');
 const codexSessions = require('../shared/codexSessions.js');
+const { CodexExecParser } = require('../shared/codexExec.js');
 const { needsCmdWrap, parseCmdShim, tokenizeCmdLine, resolveLauncher } = require('../shared/winWrap.js');
 const claudeResolve = require('../shared/claudeResolve.js');
 const { StreamJsonParser } = require('../shared/streamJson.js');
@@ -188,7 +189,7 @@ check('run-view config props declared',
   !!cfgProps['agentyard.claudePermissionMode']);
 check('claudePermissionMode default is not a skip-permissions mode',
   cfgProps['agentyard.claudePermissionMode'].default === 'default');
-check('package version is 1.1.0', pkg.version === '1.1.0', pkg.version);
+check('package version is 1.2.0', pkg.version === '1.2.0', pkg.version);
 
 // --- 5b. v0.5 terminal: manifest wiring ---------------------------------
 check('runView config prop: enum terminal|headless, default terminal',
@@ -809,7 +810,7 @@ check('retainContextWhenHidden set',
 
 // --- 16. v1.0.0: manifest + extension wiring for clipboard/attach ----
 {
-  check('manifest: version is exactly 1.1.0', pkg.version === '1.1.0');
+  check('manifest: version is exactly 1.2.0', pkg.version === '1.2.0');
   check('manifest: keywords include "claude code" and "terminal"',
     Array.isArray(pkg.keywords) && pkg.keywords.includes('claude code') && pkg.keywords.includes('terminal'));
   check('manifest: galleryBanner is set (dark, #1e1e2e)',
@@ -1478,6 +1479,272 @@ check('retainContextWhenHidden set',
     !/^media\/starter-guidelines/m.test(vsig) && !/^media\/\*\*\s*$/m.test(vsig));
   check('bundled: media/starter-guidelines/AGENTS.md exists',
     fs.existsSync(path.join(EXT_ROOT, 'media', 'starter-guidelines', 'AGENTS.md')));
+}
+
+// --- 25. v1.2 scope E: Codex sessions reach the office scene -----------
+{
+  const L = win.AY.live;
+  const M = win.AY.model;
+  const B = Date.parse('2026-09-07T12:00:00Z');
+  const iso = (s) => new Date(B + s * 1000).toISOString();
+  const cx = (over) => Object.assign({ source: 'codex', session_id: 'cx-1', cwd: '/w/widget-shop' }, over);
+
+  // -- live.js folds codexEvents into the same working/idle/gone/blocked machine
+  const codexEvents = [
+    cx({ ts: iso(0), kind: 'meta' }),
+    cx({ ts: iso(1), kind: 'activity', doing: 'working' }),
+    cx({ ts: iso(2), kind: 'activity', doing: 'shell: npm test' }),
+  ];
+  const r1 = L.resolve([], { nowMs: B + 5000, idleSeconds: 30, codexEvents });
+  const c1 = r1.agents.find((a) => a.kind === 'codex');
+  check('E/live: a codex session becomes a source:codex agent, working',
+    c1 && c1.source === 'codex' && c1.key === 'codex:cx-1' && c1.status === 'working' &&
+    c1.name === 'widget-shop' && c1.doing === 'shell: npm test',
+    c1 ? JSON.stringify({ key: c1.key, status: c1.status, doing: c1.doing }) : 'no codex agent');
+
+  const rIdle = L.resolve([], { nowMs: B + 60 * 1000, idleSeconds: 30, codexEvents });
+  check('E/live: a codex session silent past idleSeconds -> idle',
+    rIdle.agents.find((a) => a.kind === 'codex').status === 'idle');
+
+  const rEnded = L.resolve([], {
+    nowMs: B + 5000, idleSeconds: 30,
+    codexEvents: codexEvents.concat(cx({ ts: iso(3), kind: 'ended', ended: true })),
+  });
+  const cEnded = rEnded.agents.find((a) => a.kind === 'codex');
+  check('E/live: task_complete -> the room lingers then is gone', cEnded && cEnded.leaving === true);
+  const rGone = L.resolve([], {
+    nowMs: B + 60 * 1000, idleSeconds: 30,
+    codexEvents: codexEvents.concat(cx({ ts: iso(3), kind: 'ended', ended: true })),
+  });
+  check('E/live: task_complete -> gone after linger',
+    !rGone.agents.some((a) => a.kind === 'codex'));
+
+  const rBlocked = L.resolve([], {
+    nowMs: B + 5000, idleSeconds: 30,
+    codexEvents: codexEvents.concat(cx({ ts: iso(3), kind: 'blocked', doing: 'error: boom' })),
+  });
+  check('E/live: an error payload -> blocked',
+    rBlocked.agents.find((a) => a.kind === 'codex').status === 'blocked');
+
+  const rStale = L.resolve([], { nowMs: B + 30 * 60 * 1000, idleSeconds: 30, staleMs: 15 * 60000, codexEvents });
+  check('E/live: a never-ended codex session past the stale horizon is dropped',
+    !rStale.agents.some((a) => a.kind === 'codex'));
+
+  // -- compound key: a Claude Code event + a Codex event with the SAME raw id
+  const sameId = 'shared-123';
+  const hookEv = [
+    { ts: iso(0), hook_event_name: 'SessionStart', session_id: sameId, cwd: '/w/app' },
+    { ts: iso(1), hook_event_name: 'PreToolUse', session_id: sameId, cwd: '/w/app', tool_name: 'Edit', tool_input_summary: 'a.ts' },
+  ];
+  const rBoth = L.resolve(hookEv, {
+    nowMs: B + 3000, idleSeconds: 30,
+    codexEvents: [cx({ ts: iso(0), kind: 'meta', session_id: sameId }), cx({ ts: iso(1), kind: 'activity', doing: 'working', session_id: sameId })],
+  });
+  const mains = rBoth.agents.filter((a) => a.kind === 'main');
+  const codexes = rBoth.agents.filter((a) => a.kind === 'codex');
+  check('E/live: same raw session_id -> two distinct agents (compound key)',
+    mains.length === 1 && codexes.length === 1 &&
+    mains[0].key === 'main:' + sameId && codexes[0].key === 'codex:' + sameId);
+  const officeBoth = M.build(
+    { departments, teamRoles, dataMode: 'demo', liveEvents: hookEv, codexEvents:
+      [cx({ ts: iso(0), kind: 'meta', session_id: sameId }), cx({ ts: iso(1), kind: 'activity', doing: 'working', session_id: sameId })],
+      hooksInstalled: true, nowMs: B + 3000, idleSeconds: 30 },
+    { projects, statuses });
+  check('E/model: same raw id -> a Claude live room AND a codex live room, both present',
+    officeBoth.liveRooms.some((r) => r.kind === 'live-main') &&
+    officeBoth.liveRooms.some((r) => r.kind === 'live-codex' && r.id === 'live:codex:' + sameId));
+  check('E/model: the codex live room carries model "codex" and no department overlay',
+    (() => {
+      const room = officeBoth.liveRooms.find((r) => r.kind === 'live-codex');
+      return room && room.model === 'codex' && room.source === 'codex' &&
+        room.occupants.length === 1 && !officeBoth.departments.some((d) => d.live);
+    })());
+
+  // -- REGRESSION: the Claude-only scene is byte-identical with [] and with the key absent
+  const claudeOnly = fs.readFileSync(path.join(DD, 'sample-events.jsonl'), 'utf8')
+    .split('\n').map((l) => l.trim()).filter(Boolean).map((l) => JSON.parse(l));
+  let maxTs = 0;
+  for (const e of claudeOnly) { const m = Date.parse(String(e.ts || '')); if (!isNaN(m)) maxTs = Math.max(maxTs, m); }
+  const mk = (extra) => M.build(
+    Object.assign({ departments, teamRoles, dataMode: 'demo', liveEvents: claudeOnly,
+      hooksInstalled: true, nowMs: maxTs + 3000, idleSeconds: 30, platform: 'linux' }, extra || {}),
+    { projects, statuses });
+  const noKey = JSON.stringify(mk());
+  const emptyArr = JSON.stringify(mk({ codexEvents: [] }));
+  check('E/regression: Claude-only office model identical with codexEvents absent vs []',
+    noKey === emptyArr && !/live-codex/.test(noKey), noKey === emptyArr ? 'ok' : 'DIFF');
+  const rNoKey = JSON.stringify(L.resolve(claudeOnly, { nowMs: maxTs + 3000, idleSeconds: 30 }));
+  const rEmpty = JSON.stringify(L.resolve(claudeOnly, { nowMs: maxTs + 3000, idleSeconds: 30, codexEvents: [] }));
+  check('E/regression: live.resolve identical with codexEvents absent vs []', rNoKey === rEmpty);
+
+  // -- palette: one fixed codex colour, distinct from sonnet-teal and haiku-yellow
+  check('E/palette: modelColor("codex") is a fixed value distinct from sonnet/haiku',
+    win.AY.modelColor('codex') === win.AY.palette.codex &&
+    win.AY.modelColor('codex') !== win.AY.modelColor('sonnet') &&
+    win.AY.modelColor('codex') !== win.AY.modelColor('haiku'));
+
+  // -- render: a codex live room draws without throwing
+  try {
+    win.AY.render.render(ctx, officeBoth, 2500, { selectedId: 'live:codex:' + sameId });
+    check('E/render: a codex live room renders without throwing', true);
+  } catch (e) {
+    check('E/render: a codex live room renders without throwing', false, e.message);
+  }
+
+  // -- the real fixture (dev-data/codex-rollout.jsonl) drives a room too
+  const rollout = codexSessions.normalize(
+    fs.readFileSync(path.join(DD, 'codex-rollout.jsonl'), 'utf8').split('\n'));
+  const shifted = rollout.filter((e) => e.kind !== 'ended')
+    .map((e, i) => ({ ...e, ts: new Date(B + i * 500).toISOString() }));
+  const officeRollout = M.build(
+    { departments, teamRoles, dataMode: 'demo', liveEvents: [], codexEvents: shifted,
+      hooksInstalled: true, nowMs: B + 3000, idleSeconds: 30 },
+    { projects, statuses });
+  check('E/fixture: codex-rollout.jsonl (task_complete stripped) -> a live-codex room',
+    officeRollout.liveRooms.some((r) => r.kind === 'live-codex' && r.title === 'widget-shop'));
+}
+
+// --- 26. v1.2 scope F: headless Codex in the Run feed -----------------
+{
+  // -- buildHeadlessCodexArgs: `codex exec <prompt> --json`, prompt one arg
+  const fresh = buildHeadlessCodexArgs({ prompt: 'add a test for parseFoo' });
+  check('F/args: fresh run is `codex exec <prompt> --json`, prompt a single arg',
+    fresh.command === 'codex' &&
+    JSON.stringify(fresh.args) === JSON.stringify(['exec', 'add a test for parseFoo', '--json']));
+  const hostile = buildHeadlessCodexArgs({ prompt: 'say "hi" & echo done' });
+  check('F/args: a prompt with shell metachars stays ONE argv element (not split, not quoted)',
+    hostile.args[1] === 'say "hi" & echo done' && hostile.args.length === 3);
+  const resumed = buildHeadlessCodexArgs({
+    codexPath: 'codex.cmd', prompt: 'keep going', resumeId: 'roll-9',
+    extraArgs: ['--model', 'gpt-5-codex', '', 42],
+  });
+  check('F/args: resume -> `codex exec resume <id> <prompt> --json`, extra args verbatim + ordered, non-strings dropped',
+    resumed.command === 'codex.cmd' &&
+    JSON.stringify(resumed.args) ===
+      JSON.stringify(['exec', 'resume', 'roll-9', 'keep going', '--json', '--model', 'gpt-5-codex']));
+  check('F/args: no Claude-only flags (-p / --output-format / --print)',
+    !resumed.args.includes('-p') && !resumed.args.includes('--output-format') && !resumed.args.includes('--print'));
+  check('F/args: falsy resumeId adds no `resume` subcommand',
+    !buildHeadlessCodexArgs({ prompt: 'x', resumeId: null }).args.includes('resume'));
+
+  // -- shared/codexExec.js: a `codex exec --json` stream -> ordered feed items
+  const raw = fs.readFileSync(path.join(DD, 'codex-exec-stream.jsonl'), 'utf8');
+  const cut = Math.floor(raw.length / 2);
+  const p = new CodexExecParser();
+  let items;
+  let threw = false;
+  try {
+    items = p.push(raw.slice(0, cut)).concat(p.push(raw.slice(cut))).concat(p.flush());
+  } catch (e) { threw = true; }
+  check('F/exec: parses in arbitrary chunks, a malformed line skipped without throwing',
+    !threw && Array.isArray(items));
+  const kinds = items.map((i) => i.kind);
+  check('F/exec: ordered feed items — prompt, tool, text, result',
+    JSON.stringify(kinds) === JSON.stringify(['prompt', 'tool', 'text', 'result']),
+    JSON.stringify(kinds));
+  const toolItem = items.find((i) => i.kind === 'tool');
+  check('F/exec: tool item name + summary, and its line matches the Claude tool-line format',
+    toolItem.name === 'shell' && toolItem.summary === 'npm test --silent' &&
+    win.AY.run.describe({ kind: 'tool', name: toolItem.name, summary: toolItem.summary }).text === '→ shell: npm test --silent' &&
+    win.AY.run.describe(toolItem).text === '→ shell: npm test --silent');
+  check('F/exec: assistant message -> a text item; task_complete -> a result item with turns',
+    items.find((i) => i.kind === 'text').text === 'Added the test — 13 passing.' &&
+    items.find((i) => i.kind === 'result').ok === true &&
+    items.find((i) => i.kind === 'result').numTurns === 3);
+  check('F/exec: the session id is captured for `codex exec resume`', p.sessionId === 'codex-exec-0007');
+  check('F/exec: a bare non-JSON line never throws and produces no item',
+    (() => { const q = new CodexExecParser(); const out = q.push('not json at all\n'); return out.length === 0; })());
+
+  // -- run.js describe() renders the Codex-only kinds
+  check('F/run.describe: text -> assistant line, prompt -> prompt line, error -> error line',
+    win.AY.run.describe({ kind: 'text', text: 'hi' }).cls === 'ln-assistant' &&
+    win.AY.run.describe({ kind: 'prompt', text: 'do x' }).cls === 'ln-prompt' &&
+    win.AY.run.describe({ kind: 'error', text: 'boom' }).cls === 'ln-error');
+
+  // -- extension.js wiring: RunController is backend-aware, the v1.1 refusal is gone
+  const extSrc = fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8');
+  check('F/extension: RunController.send is backend-aware (buildHeadlessCodexArgs + CodexExecParser)',
+    /buildHeadlessCodexArgs\(\{/.test(extSrc) &&
+    /this\.parser = this\.backendId === 'codex' \? new CodexExecParser\(\) : new StreamJsonParser\(\)/.test(extSrc));
+  check('F/extension: the v1.1 "headless Run view supports Claude Code only" refusal is removed',
+    !/headless Run view supports Claude Code only/.test(extSrc));
+  check('F/extension: send() routes the requested backend, spawn failures keep friendlySpawnMessage',
+    /this\.run\.send\(msg\.prompt, !!msg\.resume, msg\.backend\)/.test(extSrc) &&
+    /friendlySpawnMessage\([\s\S]{0,80}this\.backendId\)/.test(extSrc));
+  const runSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'run.js'), 'utf8');
+  check('F/run.js: a headless-feed backend switcher, send passes the chosen backend',
+    /run-backend-switch-feed/.test(runSrc) && /adapter\.runSend\(text, threadActive, backend\)/.test(runSrc));
+  const idxHtmlF = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'index.html'), 'utf8');
+  check('F/index.html + getHtml: #run-backend-switch-feed element present in both',
+    /id="run-backend-switch-feed"/.test(idxHtmlF) && /id="run-backend-switch-feed"/.test(extSrc));
+}
+
+// --- 27. v1.2 scope G: the visible guideline sync chip ---------------
+{
+  const G = guidelines;
+  // -- the pure chip-state helper: label + action for every sync label
+  check('G/chip: in-sync -> quiet, action open',
+    (() => { const c = G.chipState('in-sync'); return c.show && c.tone === 'ok' && c.action === 'open'; })());
+  check('G/chip: diverged -> attention, action sync ("Sync now")',
+    (() => { const c = G.chipState('diverged'); return c.show && c.tone === 'warn' && c.action === 'sync'; })());
+  check('G/chip: only-agents + Claude enabled -> offer to create the CLAUDE.md pointer',
+    (() => { const c = G.chipState('only-agents', { claudeEnabled: true }); return c.action === 'create-pointer' && c.tone === 'warn'; })());
+  check('G/chip: only-agents + Claude NOT enabled -> quiet, nothing to fix',
+    (() => { const c = G.chipState('only-agents', { claudeEnabled: false }); return c.tone === 'ok' && c.action === 'open'; })());
+  check('G/chip: only-claude -> attention, action setup (needs a canonical AGENTS.md)',
+    (() => { const c = G.chipState('only-claude'); return c.show && c.tone === 'warn' && c.action === 'setup'; })());
+  check('G/chip: n/a -> hidden when there is no workspace, muted "set up" when there is',
+    G.chipState('n/a', { hasWorkspace: false }).show === false &&
+    (() => { const c = G.chipState('n/a', { hasWorkspace: true }); return c.show && c.action === 'setup' && c.tone === 'muted'; })());
+
+  // -- the "Sync now" write plan: exactly pointerText(), backup staged
+  const plan = G.syncPointerPlan();
+  check('G/plan: syncPointerPlan re-points CLAUDE.md to exactly pointerText(), stages a backup',
+    plan.file === 'CLAUDE.md' && plan.content === G.pointerText() && plan.backupFirst === true);
+
+  // -- extension.js wiring
+  const extSrc = fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8');
+  check('G/extension: guidelineState computes the chip from the pure helper',
+    /chip: guidelines\.chipState\(sync, \{/.test(extSrc));
+  check('G/extension: the chip "Sync now" path backs up CLAUDE.md before re-pointing it',
+    /function syncGuidelinesCommand\(/.test(extSrc) &&
+    /copyFileSync\(claudePath, claudePath \+ '\.agentyard-backup'\)/.test(extSrc) &&
+    /fs\.writeFileSync\(claudePath, plan\.content\)/.test(extSrc));
+  check('G/extension: the chip click intent (guidelineAction) is handled in handleUi',
+    /msg\.action === 'guidelineAction'/.test(extSrc) &&
+    /syncGuidelinesCommand\(this, msg\.which\)/.test(extSrc));
+
+  // -- webview wiring: chip element + render + no chip logic in the webview
+  const idxHtmlG = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'index.html'), 'utf8');
+  check('G/webview: #guideline-chip element in index.html and getHtml',
+    /id="guideline-chip"/.test(idxHtmlG) && /id="guideline-chip"/.test(extSrc));
+  const mainSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'main.js'), 'utf8');
+  check('G/webview: main.js renders raw.guideline.chip and forwards the click, no chip logic of its own',
+    /renderChip\(raw\.guideline\)/.test(mainSrc) &&
+    /guidelineAction/.test(mainSrc) && !/chipState/.test(mainSrc));
+
+  // -- dev server stubs the guideline so the chip renders in the browser
+  const devSrc = fs.readFileSync(path.join(EXT_ROOT, 'scripts', 'dev-server.mjs'), 'utf8');
+  check('G/dev-server: /api/agents carries a guideline stub with a chip',
+    /guideline: devGuideline\(\)/.test(devSrc) && /guidelines\.chipState\(/.test(devSrc));
+}
+
+// --- 28. v1.2: manifest version + CHANGELOG ---------------------------
+{
+  check('v1.2: package.json version is 1.2.0', pkg.version === '1.2.0', pkg.version);
+  check('v1.2: agentyard.agents still defaults to ["claude-code"], no keys renamed',
+    JSON.stringify((((pkg.contributes || {}).configuration || {}).properties || {})['agentyard.agents'].default) ===
+      JSON.stringify(['claude-code']));
+  const props12 = Object.keys((((pkg.contributes || {}).configuration || {}).properties) || {});
+  check('v1.2: no new config keys added (still 19)', props12.length === 19, props12.length + ' keys');
+  const changelog = fs.readFileSync(path.join(EXT_ROOT, 'CHANGELOG.md'), 'utf8');
+  check('v1.2: CHANGELOG has a 1.2.0 section mentioning Codex office rooms / headless / sync chip',
+    /##\s*1\.2\.0/.test(changelog) &&
+    /[Cc]odex/.test(changelog.split('## 1.2.0')[1].split('\n## ')[0]));
+  // dev-data JSONL fixtures never ship in the .vsix
+  const vsig = fs.readFileSync(path.join(EXT_ROOT, '.vscodeignore'), 'utf8');
+  check('v1.2: .vscodeignore still excludes dev-data/*.jsonl (codex fixtures stay local)',
+    /^dev-data\/\*\.jsonl\s*$/m.test(vsig));
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

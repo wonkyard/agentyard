@@ -90,6 +90,29 @@ html, body {
   font-weight: 700;
 }
 
+/* guideline sync chip (scope G): a persistent status/action affordance in the
+   header, matching the view-toggle toolbar style. tone drives the accent. */
+#guideline-chip {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--dim);
+  font: inherit;
+  font-size: 9px;
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#guideline-chip[hidden] { display: none; }
+#guideline-chip:hover { color: var(--text); border-color: #3d465f; }
+#guideline-chip[data-tone="ok"] { color: #2ec4b6; border-color: #21514c; }
+#guideline-chip[data-tone="warn"] {
+  color: #ffd166;
+  border-color: #5a4a1f;
+  background: #2a2410;
+}
+
 #office-pane,
 #run-pane {
   position: relative;
@@ -135,15 +158,19 @@ html, body {
   padding: 5px 8px;
 }
 #run-term-foot[hidden] { display: none; }
-/* Claude Code / Codex switcher — only shown when >1 backend is enabled */
-#run-backend-switch {
+/* Claude Code / Codex switcher — only shown when >1 backend is enabled.
+   #run-backend-switch = terminal foot; #run-backend-switch-feed = headless feed foot */
+#run-backend-switch,
+#run-backend-switch-feed {
   display: inline-flex;
   border: 1px solid var(--line);
   border-radius: 3px;
   overflow: hidden;
 }
-#run-backend-switch[hidden] { display: none; }
-#run-backend-switch button {
+#run-backend-switch[hidden],
+#run-backend-switch-feed[hidden] { display: none; }
+#run-backend-switch button,
+#run-backend-switch-feed button {
   background: transparent;
   border: 0;
   color: var(--dim);
@@ -152,7 +179,8 @@ html, body {
   padding: 3px 9px;
   cursor: pointer;
 }
-#run-backend-switch button.on {
+#run-backend-switch button.on,
+#run-backend-switch-feed button.on {
   background: #2ec4b6;
   color: #0d0f16;
   font-weight: 700;

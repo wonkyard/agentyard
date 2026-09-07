@@ -285,20 +285,22 @@
     drawWindow(ctx, rx + 18, fy + 3, 22, 10, t);
     drawWindow(ctx, rx + w - 42, fy + 3, 22, 10, t);
 
-    // title bar
+    // title bar — Codex rooms (scope E) get the codex accent, everything else teal
+    const isCodex = room.kind === 'live-codex' || room.source === 'codex';
     px(ctx, rx, ry, w, 14, P.roomLabelBg);
-    px(ctx, rx, ry, 4, 14, P.accentTeal);
+    px(ctx, rx, ry, 4, 14, isCodex ? P.codex : P.accentTeal);
     ctx.textBaseline = 'top';
     ctx.font = '10px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
     ctx.fillStyle = P.text;
     ctx.fillText(trunc(ctx, room.title, w - 46), rx + 8, ry + 2);
     // pulsing LIVE dot
     const pulse = 0.4 + 0.6 * Math.abs(Math.sin(t / 500));
-    alpha(ctx, pulse, () => px(ctx, rx + w - 14, ry + 4, 6, 6, P.green));
+    alpha(ctx, pulse, () => px(ctx, rx + w - 14, ry + 4, 6, 6, isCodex ? P.codex : P.green));
 
     ctx.font = '8px ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
     ctx.fillStyle = P.textFaint;
-    ctx.fillText(trunc(ctx, (room.kind === 'live-main' ? 'main · ' : 'subagent · ') + room.subtitle, w - 12), rx + 8, ry + h - 9);
+    const kindLabel = isCodex ? 'codex · ' : (room.kind === 'live-main' ? 'main · ' : 'subagent · ');
+    ctx.fillText(trunc(ctx, kindLabel + room.subtitle, w - 12), rx + 8, ry + h - 9);
 
     const rects = [];
     const occ = room.occupants || [];

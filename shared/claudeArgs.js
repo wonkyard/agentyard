@@ -123,6 +123,49 @@ function buildInteractiveCodexArgs(opts) {
 }
 
 /**
+ * Builds the argv for a HEADLESS `codex exec` run — the Codex equivalent of
+ * `buildClaudeArgs`. `codex exec` streams JSONL to stdout with `--json`, which
+ * `shared/codexExec.js` parses into the same feed items the Run view already
+ * renders for Claude. Pure: the extension does the spawn.
+ *
+ * Shape (from the Codex CLI facts in the v1.2 brief / `.claude/agents/agentyard.md`):
+ *   fresh   →  codex exec "<prompt>" --json  [extraArgs…]
+ *   resume  →  codex exec resume <id> "<prompt>" --json  [extraArgs…]
+ *
+ * The prompt is ALWAYS its own argv element — never interpolated into a shell
+ * string (same rule as `buildClaudeArgs`; Windows `.cmd` handling is in
+ * shared/winWrap.js). NO Claude-only flags (`-p`, `--output-format`) and NO
+ * sandbox / approval flags are mapped — anything Codex needs goes through
+ * `agentyard.codexExtraArgs`, appended here verbatim and in order.
+ *
+ * @param {object} opts
+ * @param {string} [opts.codexPath]     configured binary name/path (default "codex")
+ * @param {string} opts.prompt          the user's prompt (kept verbatim)
+ * @param {string|null} [opts.resumeId] rollout/session id to continue, or falsy for a fresh run
+ * @param {string[]} [opts.extraArgs]   verbatim extra argv, appended in order
+ * @returns {{command:string, args:string[], prompt:string}}
+ */
+function buildHeadlessCodexArgs(opts) {
+  opts = opts || {};
+  const prompt = typeof opts.prompt === 'string'
+    ? opts.prompt
+    : String(opts.prompt == null ? '' : opts.prompt);
+
+  const resumeId = cleanStr(opts.resumeId);
+  const args = ['exec'];
+  if (resumeId) args.push('resume', resumeId);
+  args.push(prompt, '--json');
+
+  const extra = Array.isArray(opts.extraArgs) ? opts.extraArgs : [];
+  for (const a of extra) {
+    if (typeof a === 'string' && a.length) args.push(a);
+  }
+
+  const command = cleanStr(opts.codexPath) || 'codex';
+  return { command, args, prompt };
+}
+
+/**
  * Ordered list of executables to try for a bare command name. On Windows an
  * npm-installed CLI is usually `<name>.cmd`; a native install is `<name>.exe`.
  * If the caller already gave an explicit extension or a path separator we trust
@@ -144,5 +187,6 @@ module.exports = {
   buildClaudeArgs,
   buildInteractiveClaudeArgs,
   buildInteractiveCodexArgs,
+  buildHeadlessCodexArgs,
   candidateCommands,
 };

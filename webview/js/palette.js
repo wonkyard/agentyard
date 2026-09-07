@@ -53,6 +53,10 @@
     textDim: '#9aa0b4',
     textFaint: '#6b7189',
     eye: '#15171f',
+    // --- coding-agent backend accents ---
+    // Codex live rooms (v1.2 scope E). A fixed value distinct from sonnet-teal
+    // (#2ec4b6) and haiku-yellow (#ffd166) so the two backends never read alike.
+    codex: '#6ea8fe',
     // --- status ---
     working: '#ffd166',
     idle: '#8b91a7',
@@ -92,6 +96,7 @@
   function modelColor(model) {
     if (model === 'sonnet') return PALETTE.accentTeal;
     if (model === 'haiku') return PALETTE.yellow;
+    if (model === 'codex') return PALETTE.codex;
     return PALETTE.textDim;
   }
 

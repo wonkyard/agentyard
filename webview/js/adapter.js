@@ -68,9 +68,11 @@
           teamRoles: agents.teamRoles,
           dbBytes,
           liveEvents: live.events || [],
+          codexEvents: live.codexEvents || [], // scope E: browser dev stub
           hooksInstalled: !!live.hooksInstalled,
           nowMs: Date.now(),
           staleWorkingHours: agents.staleWorkingHours, // optional; model defaults to 3h
+          guideline: agents.guideline || null, // scope G: dev-server chip stub
         };
       },
     };
@@ -127,6 +129,7 @@
         teamRoles: msg.teamRoles || [],
         dbBytes: msg.dbBase64 ? b64ToBytes(msg.dbBase64) : new Uint8Array(),
         liveEvents: msg.liveEvents || [],
+        codexEvents: Array.isArray(msg.codexEvents) ? msg.codexEvents : [], // scope E
         hooksInstalled: !!msg.hooksInstalled,
         nowMs: msg.nowMs || Date.now(),
         idleSeconds: msg.idleSeconds || 30,
@@ -205,8 +208,11 @@
       runStatus() {
         vscode.postMessage({ type: 'run', action: 'status' });
       },
-      runSend(prompt, resume) {
-        vscode.postMessage({ type: 'run', action: 'send', prompt: String(prompt), resume: !!resume });
+      runSend(prompt, resume, backend) {
+        vscode.postMessage({
+          type: 'run', action: 'send', prompt: String(prompt), resume: !!resume,
+          backend: backend ? String(backend) : undefined,
+        });
       },
       runCancel() {
         vscode.postMessage({ type: 'run', action: 'cancel' });
