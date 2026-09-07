@@ -20,6 +20,7 @@ const require = createRequire(import.meta.url);
 const { toDepartments } = require('../shared/frontmatter.js');
 const { StreamJsonParser } = require('../shared/streamJson.js');
 const guidelines = require('../shared/guidelines.js');
+const handoff = require('../shared/handoff.js');
 const modelPick = require('../shared/modelPick.js');
 const codexSessions = require('../shared/codexSessions.js');
 const PKG_VERSION = require('../package.json').version;
@@ -130,6 +131,19 @@ function devModel() {
   };
 }
 
+// v1.4: render the bundled handoff fixture through the pure builder so the
+// digest shape can be eyeballed without VS Code (the Run-view button itself is
+// a "available inside VS Code" stub in the browser, like the rest of Run).
+function handoffSample() {
+  try {
+    const raw = fs.readFileSync(path.join(DEMO_DIR, 'handoff-claude.jsonl'), 'utf8');
+    const entries = raw.split('\n').filter((l) => l.trim());
+    return { digest: handoff.buildHandoffDigest({ source: 'claude', entries, maxTurns: 20 }) };
+  } catch {
+    return { digest: '' };
+  }
+}
+
 const PORT = Number(process.env.PORT || 4173);
 
 const MIME = {
@@ -214,6 +228,9 @@ const server = http.createServer((req, res) => {
     }
     if (url.startsWith('/api/events')) {
       return sendJson(res, { ...readEvents(), codexEvents: readCodexEvents() });
+    }
+    if (url.startsWith('/api/handoff-sample')) {
+      return sendJson(res, handoffSample());
     }
     if (url.startsWith('/api/run-sample')) {
       // The run view needs a real child process (VS Code only). For browser

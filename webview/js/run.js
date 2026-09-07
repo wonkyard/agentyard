@@ -76,6 +76,17 @@
     input.dispatchEvent(new root.Event('input'));
   }
 
+  // Pure (unit-tested): drop a pre-filled prompt into an input-like object and
+  // put the caret at the end. Never submits — the user reviews it and hits Enter.
+  function prefillInput(inputLike, text) {
+    if (!inputLike) return '';
+    inputLike.value = String(text == null ? '' : text);
+    const caret = inputLike.value.length;
+    try { inputLike.setSelectionRange(caret, caret); } catch (e) { /* ignore */ }
+    try { if (inputLike.focus) inputLike.focus(); } catch (e) { /* ignore */ }
+    return inputLike.value;
+  }
+
   function sendImageFile(adapter, file) {
     if (!file || !adapter.attachImage) return;
     const reader = new root.FileReader();
@@ -103,6 +114,7 @@
     const hint = document.getElementById('run-hint');
     const backendSwitch = document.getElementById('run-backend-switch-feed');
     const modelPickEl = document.getElementById('run-model-pick-feed');
+    const handoffBtn = document.getElementById('run-handoff-feed');
     if (!feed || !input) return;
 
     const cfg = root.AY_CONFIG || {};
@@ -188,7 +200,24 @@
       }
       if (AY.modelpick && AY.modelpick.refresh) AY.modelpick.refresh();
       input.placeholder = placeholderFor(id);
+      renderHandoff();
       updateMeta();
+    }
+
+    // v1.4: "이어받기" — always shown with >1 backend (detection happens on click),
+    // sits quietly. Hands off FROM the other backend INTO the one you are on.
+    function otherBackend(id) {
+      return agents.filter((a) => a !== id)[0] || id;
+    }
+    function renderHandoff() {
+      if (!handoffBtn) return;
+      if (agents.length < 2) { handoffBtn.hidden = true; return; }
+      const other = otherBackend(backend);
+      handoffBtn.hidden = false;
+      handoffBtn.textContent = '↔ ' + (BACKEND_LABEL[other] || other) + '에서 이어받기';
+      handoffBtn.title = (BACKEND_LABEL[other] || other) +
+        ' 세션의 맥락을 .agentyard/HANDOFF.md 로 넘기고 ' +
+        (BACKEND_LABEL[backend] || backend) + ' 입력창에 이어서 프롬프트를 채웁니다.';
     }
 
     function doSend() {
@@ -317,6 +346,25 @@
       AY.modelpick.attach(modelPickEl, () => backend);
     }
 
+    // v1.4: handoff button + the extension's prefill reply (feed mode only —
+    // term.js owns the pane when runView is "terminal").
+    if (handoffBtn) {
+      handoffBtn.addEventListener('click', () => {
+        if (adapter.handoff) adapter.handoff(backend);
+        else if (adapter.sendMsg) adapter.sendMsg({ type: 'handoff', to: backend });
+      });
+    }
+    renderHandoff();
+    if (adapter.onMsg && cfg.runView !== 'terminal') {
+      adapter.onMsg((msg) => {
+        if (!msg || msg.type !== 'handoff' || msg.event !== 'prefillInput') return;
+        if (AY.showView) AY.showView('run');
+        if (msg.to && msg.to !== backend && agents.indexOf(msg.to) !== -1) setBackend(msg.to);
+        prefillInput(input, msg.text);
+        autosize();
+      });
+    }
+
     if (adapter.onRun) adapter.onRun(handle);
     setRunning(false);
 
@@ -342,5 +390,5 @@
     updateMeta();
   }
 
-  AY.run = { init, describe };
+  AY.run = { init, describe, prefillInput };
 })(window);

@@ -17,6 +17,7 @@ const {
 const { needsCmdWrap, resolveLauncher } = require('./shared/winWrap.js');
 const claudeResolve = require('./shared/claudeResolve.js');
 const guidelines = require('./shared/guidelines.js');
+const handoff = require('./shared/handoff.js');
 const modelPick = require('./shared/modelPick.js');
 const codexSessions = require('./shared/codexSessions.js');
 const { StreamJsonParser } = require('./shared/streamJson.js');
@@ -122,6 +123,13 @@ const EVENTS_DIR = AGENTYARD_DIR;
 
 // Codex rollout transcripts (v1.2 scope E). ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
 const CODEX_SESSIONS_DIR = path.join(os.homedir(), '.codex', 'sessions');
+// Claude Code session transcripts (v1.4 handoff). ~/.claude/projects/<slug>/*.jsonl
+const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
+// v1.4: the pre-filled first prompt for the incoming agent. __FROM__ is the
+// outgoing backend's display name.
+const HANDOFF_PROMPT =
+  '이전 __FROM__ 세션에서 이어서 작업해줘. 지금까지의 맥락은 .agentyard/HANDOFF.md 에 있어 — ' +
+  '먼저 읽고, 네가 이해한 현재 상태와 다음 할 일을 한 번 정리한 다음 진행해줘.';
 // LiveLog has no explicit file-count cap (it caps events, not files); a bounded
 // poll of the Codex tree needs one, so this is the Codex-side equivalent.
 const CODEX_FILE_CAP = 12;
@@ -1227,6 +1235,7 @@ function getHtml(webview, extUri, context) {
       <div id="run-term" hidden></div>
       <div id="run-term-foot" hidden>
         <span id="run-backend-switch" hidden></span>
+        <button type="button" id="run-handoff" class="run-handoff" hidden></button>
         <button type="button" id="run-model-pick" class="run-model-pick" hidden></button>
         <button type="button" id="run-term-attach" class="attach-btn" title="Attach a file or image">📎 Attach</button>
         <button type="button" id="run-term-new">New thread</button>
@@ -1243,6 +1252,7 @@ function getHtml(webview, extUri, context) {
         </div>
         <div id="run-foot">
           <span id="run-backend-switch-feed" hidden></span>
+          <button type="button" id="run-handoff-feed" class="run-handoff" hidden></button>
           <button type="button" id="run-model-pick-feed" class="run-model-pick" hidden></button>
           <button type="button" id="run-new">New thread</button>
           <span id="run-meta"></span>
@@ -1811,6 +1821,7 @@ class OfficeViewProvider {
         else if (msg.event === 'resize') bt.resize(msg.cols, msg.rows);
         else if (msg.event === 'new') { bt.newThread(); this.clearAttachments(); }
       }
+      if (msg.type === 'handoff') handoffCommand(this, msg);
       if (msg.type === 'clip') this.handleClip(msg);
       if (msg.type === 'attach') this.handleAttach(msg);
       if (msg.type === 'onboard') this.handleOnboard(msg);
@@ -1910,6 +1921,7 @@ function activate(context) {
     vscode.commands.registerCommand('agentyard.openCodexTerminal', openCodexTerminal),
     vscode.commands.registerCommand('agentyard.setupGuide', () => provider.openSetupGuide()),
     vscode.commands.registerCommand('agentyard.setupGuidelines', () => setupGuidelinesCommand(provider)),
+    vscode.commands.registerCommand('agentyard.handoff', (arg) => handoffCommand(provider, arg)),
     vscode.commands.registerCommand('agentyard.diagnostics', showDiagnostics),
     vscode.commands.registerCommand('agentyard.createAgentFile', () => createAgentFileCommand(provider))
   );
@@ -2036,40 +2048,303 @@ async function setupGuidelinesCommand(provider) {
   }
 }
 
-// scope G: the "Sync now" / "create pointer" action behind the header chip.
-// A single modal confirm, then re-point CLAUDE.md at @AGENTS.md with the v1.1
-// backup discipline (.agentyard-backup first, never a silent clobber). Falls
-// back to the full setup flow when there is no AGENTS.md to point at yet.
-async function syncGuidelinesCommand(provider, mode) {
+// v1.4: the one-click guideline plan for this workspace root — classify the two
+// files and let the pure helper decide the exact write set. Shared by the header
+// chip (`syncGuidelinesCommand`, with a modal confirm) and the handoff command
+// (silent step 0).
+function computeGuidelinePlan(root) {
+  const agentsPath = path.join(root, 'AGENTS.md');
+  const claudePath = path.join(root, 'CLAUDE.md');
+  const aText = safeRead(agentsPath);
+  const cText = safeRead(claudePath);
+  const claudeEnabled = enabledAgents().indexOf('claude-code') !== -1;
+  const sync = guidelines.classify({
+    agentsMd: !!aText.trim(), claudeMd: !!cText.trim(), claudeText: cText,
+  });
+  const plan = guidelines.oneClickPlan(sync, {
+    claudeText: cText, agentsText: aText, claudeEnabled,
+  });
+  return { sync, plan, agentsPath, claudePath };
+}
+
+// Apply a oneClickPlan with the v1.1 backup discipline: every existing file is
+// copied to <file>.agentyard-backup before it is overwritten. Never a silent
+// clobber without a backup.
+function applyGuidelinePlan(root, plan) {
+  for (const w of (plan && plan.writes) || []) {
+    const p = path.join(root, w.file);
+    try {
+      if (fs.existsSync(p)) fs.copyFileSync(p, p + '.agentyard-backup');
+      fs.writeFileSync(p, w.content);
+    } catch (e) {
+      return { ok: false, file: w.file, error: e.message };
+    }
+  }
+  return { ok: true };
+}
+
+// scope G / v1.4: the action behind the header chip. One modal confirm listing
+// the files it will write, then apply the oneClickPlan. `only-claude` now creates
+// the missing AGENTS.md and re-points CLAUDE.md in that single confirm — no
+// multi-step quick-pick. Falls back to the full create/adopt flow only when there
+// is nothing on disk yet (`n/a`).
+async function syncGuidelinesCommand(provider) {
   const root = workspaceRoot();
   if (!root) {
     vscode.window.showWarningMessage('Open a workspace folder first — guidelines live at its root.');
     return;
   }
-  const agentsPath = path.join(root, 'AGENTS.md');
-  const claudePath = path.join(root, 'CLAUDE.md');
-  if (!safeRead(agentsPath).trim()) {
-    // nothing canonical to point at — run the real create/adopt flow instead
-    return setupGuidelinesCommand(provider);
-  }
-  const plan = guidelines.syncPointerPlan(); // { file:'CLAUDE.md', content: pointerText(), backupFirst:true }
-  const prompt = mode === 'create-pointer'
-    ? 'Create CLAUDE.md as a one-line "@AGENTS.md" pointer so Claude Code and Codex share AGENTS.md?'
-    : 'Re-point CLAUDE.md at "@AGENTS.md"? Your current CLAUDE.md is backed up to ' +
-      'CLAUDE.md.agentyard-backup first.';
-  const ok = await vscode.window.showInformationMessage(prompt, { modal: true }, 'Sync now');
-  if (ok !== 'Sync now') return;
-  try {
-    if (plan.backupFirst && fs.existsSync(claudePath)) {
-      fs.copyFileSync(claudePath, claudePath + '.agentyard-backup');
-    }
-    fs.writeFileSync(claudePath, plan.content);
-  } catch (e) {
-    vscode.window.showErrorMessage('Agentyard could not write ' + claudePath + ': ' + e.message);
+  const { sync, plan, agentsPath } = computeGuidelinePlan(root);
+  if (!plan.writes.length) {
+    if (sync === 'n/a') { await setupGuidelinesCommand(provider); return; }
+    try { await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(agentsPath)); } catch (e) { /* ignore */ }
     return;
   }
-  vscode.window.showInformationMessage('CLAUDE.md now points at AGENTS.md. A backup was saved.');
+  const files = plan.writes
+    .map((w) => '  • ' + w.file + (w.backupFirst ? '  (backed up to .agentyard-backup first)' : '  (new file)'))
+    .join('\n');
+  const ok = await vscode.window.showWarningMessage(
+    'Sync agent guidelines — ' + plan.summary + '.\n\nAgentyard will write:\n' + files,
+    { modal: true }, 'Sync'
+  );
+  if (ok !== 'Sync') return;
+  const res = applyGuidelinePlan(root, plan);
+  if (!res.ok) {
+    vscode.window.showErrorMessage('Agentyard could not write ' + res.file + ': ' + res.error);
+    return;
+  }
+  vscode.window.showInformationMessage(
+    'Agent guidelines synced. A backup was saved for every file that already existed.');
+  try { await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(agentsPath)); } catch (e) { /* ignore */ }
   if (provider) provider.pushData();
+}
+
+// ---- v1.4: cross-agent handoff ("이어받기") --------------------------------
+// Read the OUTGOING backend's own on-disk transcript, extract a mechanical
+// digest (shared/handoff.js — no LLM, no network), write it to
+// <root>/.agentyard/HANDOFF.md, switch the Run view to the incoming backend and
+// pre-fill the first prompt. Guideline sync (the §1 oneClickPlan) runs first as
+// a silent step 0.
+function readTextHead(p, bytes) {
+  try {
+    const fd = fs.openSync(p, 'r');
+    const buf = Buffer.alloc(bytes);
+    const n = fs.readSync(fd, buf, 0, bytes, 0);
+    fs.closeSync(fd);
+    return buf.toString('utf8', 0, n);
+  } catch (e) {
+    return '';
+  }
+}
+
+function normPath(s) {
+  return String(s || '').replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
+}
+
+function transcriptMentionsCwd(fp, wantNorm, maxLines) {
+  const head = readTextHead(fp, 128 * 1024);
+  const lines = head.split('\n');
+  for (let i = 0; i < lines.length && i < maxLines; i++) {
+    const s = lines[i].trim();
+    if (!s) continue;
+    try {
+      const rec = JSON.parse(s);
+      const p = rec.payload && typeof rec.payload === 'object' ? rec.payload : rec;
+      const cwd = p.cwd || rec.cwd;
+      if (cwd && normPath(cwd) === wantNorm) return true;
+    } catch (e) {
+      /* partial last line — ignore */
+    }
+  }
+  return false;
+}
+
+// The newest Claude Code main-session transcript for this workspace. Prefer a
+// recent live hook event that carries transcript_path; else the slug dir Claude
+// Code derives from the cwd (every non-alphanumeric char -> '-'); else scan all
+// project dirs and match a cwd inside the file.
+function findClaudeTranscript(root, live) {
+  const want = normPath(root);
+  try {
+    const evs = live && typeof live.recent === 'function' ? live.recent() : [];
+    for (let i = evs.length - 1; i >= 0; i--) {
+      const e = evs[i];
+      if (!e || !e.transcript_path || normPath(e.cwd) !== want) continue;
+      if (/[/\\]subagents[/\\]/.test(e.transcript_path)) continue;
+      if (fs.existsSync(e.transcript_path)) return e.transcript_path;
+    }
+  } catch (e) {
+    /* ignore — fall through to the file scan */
+  }
+
+  const base = String(root);
+  const slugs = new Set([base.replace(/[^a-zA-Z0-9]/g, '-')]);
+  if (/^[a-zA-Z]:/.test(base)) {
+    slugs.add((base[0].toLowerCase() + base.slice(1)).replace(/[^a-zA-Z0-9]/g, '-'));
+  }
+  const sureDirs = [];
+  for (const s of slugs) {
+    const d = path.join(CLAUDE_PROJECTS_DIR, s);
+    try { if (fs.statSync(d).isDirectory()) sureDirs.push(d); } catch (e) { /* not this one */ }
+  }
+
+  let scanDirs = sureDirs;
+  if (!scanDirs.length) {
+    try {
+      scanDirs = fs.readdirSync(CLAUDE_PROJECTS_DIR)
+        .map((n) => path.join(CLAUDE_PROJECTS_DIR, n))
+        .filter((d) => { try { return fs.statSync(d).isDirectory(); } catch (e) { return false; } });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  const cands = [];
+  for (const d of scanDirs) {
+    let names;
+    try { names = fs.readdirSync(d); } catch (e) { continue; }
+    for (const n of names) {
+      if (!/\.jsonl$/.test(n)) continue; // top-level only — not subagents/
+      const fp = path.join(d, n);
+      try {
+        const st = fs.statSync(fp);
+        if (st.isFile()) cands.push({ fp, mtime: st.mtimeMs });
+      } catch (e) { /* vanished */ }
+    }
+  }
+  cands.sort((a, b) => b.mtime - a.mtime);
+  if (sureDirs.length) return cands.length ? cands[0].fp : null;
+  for (const c of cands.slice(0, 12)) {
+    if (transcriptMentionsCwd(c.fp, want, 40)) return c.fp;
+  }
+  return null;
+}
+
+// The newest Codex rollout for this workspace. A handoff can pick up a session
+// from earlier in the week, so this widens the office-scene's today/yesterday
+// scan to the last 7 UTC day-dirs (handoff-only — the office scan is untouched).
+function findCodexTranscript(root) {
+  const want = normPath(root);
+  const now = new Date();
+  const cands = [];
+  for (let off = 0; off < 7; off++) {
+    const d = new Date(now.getTime() - off * 86400000);
+    const dir = path.join(
+      CODEX_SESSIONS_DIR,
+      String(d.getUTCFullYear()),
+      String(d.getUTCMonth() + 1).padStart(2, '0'),
+      String(d.getUTCDate()).padStart(2, '0')
+    );
+    let names;
+    try { names = fs.readdirSync(dir); } catch (e) { continue; }
+    for (const n of names) {
+      if (!/^rollout-.*\.jsonl$/.test(n)) continue;
+      const fp = path.join(dir, n);
+      try { cands.push({ fp, mtime: fs.statSync(fp).mtimeMs }); } catch (e) { /* ignore */ }
+    }
+  }
+  cands.sort((a, b) => b.mtime - a.mtime);
+  for (const c of cands.slice(0, 30)) {
+    if (transcriptMentionsCwd(c.fp, want, 40)) return c.fp;
+  }
+  return null;
+}
+
+const _gitignoreOffered = new Set();
+function maybeOfferGitignore(root) {
+  if (_gitignoreOffered.has(root)) return;
+  _gitignoreOffered.add(root);
+  const gi = path.join(root, '.gitignore');
+  let text;
+  try { text = fs.readFileSync(gi, 'utf8'); } catch (e) { return; } // no .gitignore — nothing to do
+  if (/(^|[/\s])\.agentyard(\/|$)/m.test(text)) return;
+  vscode.window.showInformationMessage(
+    'Add ".agentyard/" to .gitignore? Agentyard writes HANDOFF.md and scratch files there.',
+    'Add'
+  ).then((pick) => {
+    if (pick !== 'Add') return;
+    try {
+      fs.writeFileSync(gi, text.replace(/\s*$/, '') +
+        '\n\n# Agentyard scratch — HANDOFF.md, pasted images\n.agentyard/\n');
+    } catch (e) { /* best effort */ }
+  });
+}
+
+async function handoffCommand(provider, arg) {
+  const enabled = enabledAgents();
+  const normId = (id) => (id === 'claude' ? 'claude-code' : id);
+  const label = (id) => (id === 'codex' ? 'Codex' : 'Claude Code');
+
+  if (enabled.length < 2) {
+    vscode.window.showInformationMessage(
+      'Cross-agent handoff needs both Claude Code and Codex enabled (agentyard.agents).');
+    return;
+  }
+
+  let to = normId(arg && (arg.to || arg.backend));
+  if (KNOWN_AGENTS.indexOf(to) === -1 || enabled.indexOf(to) === -1) to = enabled[0];
+  const from = to === 'codex' ? 'claude-code' : 'codex';
+
+  const root = workspaceRoot();
+  if (!root) {
+    vscode.window.showInformationMessage(
+      'Open a workspace folder first — handoff reads this workspace’s sessions.');
+    return;
+  }
+
+  // step 0: silent guideline sync (skip when already in sync)
+  try {
+    const g = computeGuidelinePlan(root);
+    if (g.sync !== 'in-sync' && g.plan.writes.length) applyGuidelinePlan(root, g.plan);
+  } catch (e) {
+    /* non-fatal — the context handoff is the point */
+  }
+
+  const transcript = from === 'codex'
+    ? findCodexTranscript(root)
+    : findClaudeTranscript(root, provider && provider.live);
+  if (!transcript) {
+    vscode.window.showInformationMessage(
+      'No recent ' + label(from) + ' session in this workspace to hand off from.');
+    return;
+  }
+
+  let entries;
+  try {
+    entries = fs.readFileSync(transcript, 'utf8').split('\n').filter((l) => l.trim());
+  } catch (e) {
+    vscode.window.showWarningMessage(
+      'Agentyard could not read the ' + label(from) + ' transcript: ' + e.message);
+    return;
+  }
+
+  const digest = handoff.buildHandoffDigest({
+    source: from === 'codex' ? 'codex' : 'claude',
+    entries,
+    maxTurns: 20,
+    now: new Date().toISOString(),
+  });
+
+  const outDir = path.join(root, '.agentyard');
+  const outPath = path.join(outDir, 'HANDOFF.md');
+  try {
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(outPath, digest);
+  } catch (e) {
+    vscode.window.showWarningMessage('Agentyard could not write HANDOFF.md: ' + e.message);
+    return;
+  }
+
+  maybeOfferGitignore(root);
+
+  // Switch the Run view to `to` and pre-fill the first prompt — the webview owns
+  // the office/run toggle + the backend switcher, so it does the switch and the
+  // prefill (feed input value, or paste-without-newline into the pty).
+  const prompt = HANDOFF_PROMPT.replace('__FROM__', label(from));
+  if (provider) {
+    provider.post({ type: 'handoff', event: 'prefillInput', to, from, text: prompt });
+  }
+  vscode.window.showInformationMessage('HANDOFF.md written · switched to ' + label(to));
 }
 
 // scope C: the Run-header `model: <label> ▾` control was clicked. Show a quick

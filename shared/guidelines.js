@@ -143,8 +143,12 @@ function chipState(sync, opts) {
         : { show: true, tone: 'ok', label: 'AGENTS.md set up', action: 'open',
           hint: 'AGENTS.md is set up. Claude Code is not enabled, so no CLAUDE.md is needed.' };
     case 'only-claude':
-      return { show: true, tone: 'warn', label: 'no AGENTS.md', action: 'setup',
-        hint: 'Only CLAUDE.md exists. Click to set up a canonical AGENTS.md.' };
+      // v1.4: one modal confirm now does the whole thing — copy CLAUDE.md into a
+      // canonical AGENTS.md and reduce CLAUDE.md to the @AGENTS.md pointer. No
+      // multi-step quick-pick for the common case.
+      return { show: true, tone: 'warn', label: 'no AGENTS.md', action: 'sync',
+        hint: 'Only CLAUDE.md exists. Click to copy it into a canonical AGENTS.md and make ' +
+          'CLAUDE.md a "@AGENTS.md" pointer (both backed up first).' };
     case 'n/a':
     default:
       return { show: hasWorkspace, tone: 'muted', label: 'set up guidelines', action: 'setup',
@@ -161,6 +165,65 @@ function syncPointerPlan() {
   return { file: 'CLAUDE.md', content: pointerText(), backupFirst: true };
 }
 
+/**
+ * v1.4: the one-click write set for a header-chip click, given the `classify()`
+ * sync label and the current file bodies. The extension applies each write with
+ * the same `.agentyard-backup` discipline; `backupFirst` is true only for a file
+ * that already exists.
+ *
+ *   only-claude              -> AGENTS.md = the CLAUDE.md body, CLAUDE.md = pointer
+ *   only-agents (+ claude)    -> CLAUDE.md = pointer
+ *   diverged                  -> CLAUDE.md = pointer (syncPointerPlan)
+ *   in-sync / n/a / only-agents (claude off) -> no writes
+ *
+ * @param {string} sync
+ * @param {{claudeText?:string, agentsText?:string, claudeEnabled?:boolean}} [opts]
+ * @returns {{writes:Array<{file:string,content:string,backupFirst:boolean}>, open:string, summary:string}}
+ */
+function oneClickPlan(sync, opts) {
+  opts = opts || {};
+  const claudeText = norm(opts.claudeText);
+  const agentsText = norm(opts.agentsText);
+  const claudeEnabled = opts.claudeEnabled !== false;
+  const claudeExists = !!claudeText.trim();
+  const agentsExists = !!agentsText.trim();
+  const none = { writes: [], open: 'AGENTS.md', summary: '' };
+
+  switch (sync) {
+    case 'only-claude': {
+      const body = claudeText.replace(/^\s+/, '').replace(/\s+$/, '') + '\n';
+      return {
+        writes: [
+          { file: 'AGENTS.md', content: body, backupFirst: agentsExists },
+          { file: 'CLAUDE.md', content: pointerText(), backupFirst: claudeExists },
+        ],
+        open: 'AGENTS.md',
+        summary: 'copy CLAUDE.md into a canonical AGENTS.md, then make CLAUDE.md a "@AGENTS.md" pointer',
+      };
+    }
+    case 'only-agents': {
+      if (!claudeEnabled) return none;
+      return {
+        writes: [{ file: 'CLAUDE.md', content: pointerText(), backupFirst: claudeExists }],
+        open: 'AGENTS.md',
+        summary: 'create CLAUDE.md as a one-line "@AGENTS.md" pointer',
+      };
+    }
+    case 'diverged': {
+      const p = syncPointerPlan();
+      return {
+        writes: [{ file: p.file, content: p.content, backupFirst: true }],
+        open: 'AGENTS.md',
+        summary: 're-point CLAUDE.md at "@AGENTS.md" (your current CLAUDE.md is backed up first)',
+      };
+    }
+    case 'in-sync':
+    case 'n/a':
+    default:
+      return none;
+  }
+}
+
 module.exports = {
   IMPORT_LINE,
   POINTER_COMMENT,
@@ -173,4 +236,5 @@ module.exports = {
   plan,
   chipState,
   syncPointerPlan,
+  oneClickPlan,
 };

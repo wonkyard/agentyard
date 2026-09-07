@@ -18,6 +18,7 @@ const { toDepartments } = require('../shared/frontmatter.js');
 const hooksConfig = require('../shared/hooksConfig.js');
 const { buildClaudeArgs, buildInteractiveClaudeArgs, buildInteractiveCodexArgs, buildHeadlessCodexArgs, candidateCommands } = require('../shared/claudeArgs.js');
 const guidelines = require('../shared/guidelines.js');
+const handoffMod = require('../shared/handoff.js');
 const modelPick = require('../shared/modelPick.js');
 const codexSessions = require('../shared/codexSessions.js');
 const { CodexExecParser } = require('../shared/codexExec.js');
@@ -190,7 +191,7 @@ check('run-view config props declared',
   !!cfgProps['agentyard.claudePermissionMode']);
 check('claudePermissionMode default is not a skip-permissions mode',
   cfgProps['agentyard.claudePermissionMode'].default === 'default');
-check('package version is 1.3.0', pkg.version === '1.3.0', pkg.version);
+check('package version is 1.4.0', pkg.version === '1.4.0', pkg.version);
 
 // --- 5b. v0.5 terminal: manifest wiring ---------------------------------
 check('runView config prop: enum terminal|headless, default terminal',
@@ -811,7 +812,7 @@ check('retainContextWhenHidden set',
 
 // --- 16. v1.0.0: manifest + extension wiring for clipboard/attach ----
 {
-  check('manifest: version is exactly 1.3.0', pkg.version === '1.3.0');
+  check('manifest: version is exactly 1.4.0', pkg.version === '1.4.0');
   check('manifest: keywords include "claude code" and "terminal"',
     Array.isArray(pkg.keywords) && pkg.keywords.includes('claude code') && pkg.keywords.includes('terminal'));
   check('manifest: galleryBanner is set (dark, #1e1e2e)',
@@ -1692,8 +1693,8 @@ check('retainContextWhenHidden set',
     (() => { const c = G.chipState('only-agents', { claudeEnabled: true }); return c.action === 'create-pointer' && c.tone === 'warn'; })());
   check('G/chip: only-agents + Claude NOT enabled -> quiet, nothing to fix',
     (() => { const c = G.chipState('only-agents', { claudeEnabled: false }); return c.tone === 'ok' && c.action === 'open'; })());
-  check('G/chip: only-claude -> attention, action setup (needs a canonical AGENTS.md)',
-    (() => { const c = G.chipState('only-claude'); return c.show && c.tone === 'warn' && c.action === 'setup'; })());
+  check('G/chip: only-claude -> attention, action sync (v1.4 one-click creates the canonical AGENTS.md)',
+    (() => { const c = G.chipState('only-claude'); return c.show && c.tone === 'warn' && c.action === 'sync'; })());
   check('G/chip: n/a -> hidden when there is no workspace, muted "set up" when there is',
     G.chipState('n/a', { hasWorkspace: false }).show === false &&
     (() => { const c = G.chipState('n/a', { hasWorkspace: true }); return c.show && c.action === 'setup' && c.tone === 'muted'; })());
@@ -1707,10 +1708,12 @@ check('retainContextWhenHidden set',
   const extSrc = fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8');
   check('G/extension: guidelineState computes the chip from the pure helper',
     /chip: guidelines\.chipState\(sync, \{/.test(extSrc));
-  check('G/extension: the chip "Sync now" path backs up CLAUDE.md before re-pointing it',
+  check('G/extension: the chip Sync path drives writes from oneClickPlan, backing up existing files first',
     /function syncGuidelinesCommand\(/.test(extSrc) &&
-    /copyFileSync\(claudePath, claudePath \+ '\.agentyard-backup'\)/.test(extSrc) &&
-    /fs\.writeFileSync\(claudePath, plan\.content\)/.test(extSrc));
+    /function applyGuidelinePlan\(/.test(extSrc) &&
+    /guidelines\.oneClickPlan\(/.test(extSrc) &&
+    /copyFileSync\(p, p \+ '\.agentyard-backup'\)/.test(extSrc) &&
+    /fs\.writeFileSync\(p, w\.content\)/.test(extSrc));
   check('G/extension: the chip click intent (guidelineAction) is handled in handleUi',
     /msg\.action === 'guidelineAction'/.test(extSrc) &&
     /syncGuidelinesCommand\(this, msg\.which\)/.test(extSrc));
@@ -1885,6 +1888,166 @@ check('retainContextWhenHidden set',
   check('v1.3: CHANGELOG has a 1.3.0 section mentioning the model picker',
     /##\s*1\.3\.0/.test(changelog13) &&
     /model/i.test(changelog13.split('## 1.3.0')[1].split('\n## ')[0]));
+}
+
+// --- 30. v1.4: cross-agent handoff ("이어받기") ----------------------
+{
+  const G = guidelines;
+  const H = handoffMod;
+
+  // -- §1: guidelines.oneClickPlan — exact write set per classify() state ----
+  const claudeBody = '# My project\n\nreal guidance here\n';
+  {
+    const p = G.oneClickPlan('only-claude', { claudeText: claudeBody, agentsText: '' });
+    const a = p.writes.find((w) => w.file === 'AGENTS.md');
+    const c = p.writes.find((w) => w.file === 'CLAUDE.md');
+    check('oneClickPlan/only-claude: AGENTS.md = old CLAUDE body, CLAUDE.md = pointer, backups for existing files only',
+      a && /real guidance here/.test(a.content) && a.backupFirst === false &&
+      c && c.content === G.pointerText() && c.backupFirst === true);
+    check('oneClickPlan/only-claude: an existing AGENTS.md is backed up first',
+      G.oneClickPlan('only-claude', { claudeText: claudeBody, agentsText: '# stale' })
+        .writes.find((w) => w.file === 'AGENTS.md').backupFirst === true);
+  }
+  {
+    const p = G.oneClickPlan('only-agents', { claudeText: '', agentsText: '# a', claudeEnabled: true });
+    check('oneClickPlan/only-agents + claude enabled: create the CLAUDE.md pointer only, no backup (new file)',
+      p.writes.length === 1 && p.writes[0].file === 'CLAUDE.md' &&
+      p.writes[0].content === G.pointerText() && p.writes[0].backupFirst === false);
+    check('oneClickPlan/only-agents + claude disabled: no writes',
+      G.oneClickPlan('only-agents', { agentsText: '# a', claudeEnabled: false }).writes.length === 0);
+  }
+  {
+    const p = G.oneClickPlan('diverged', { claudeText: '# real', agentsText: '# a' });
+    check('oneClickPlan/diverged: re-point CLAUDE.md at the pointer, backed up first',
+      p.writes.length === 1 && p.writes[0].file === 'CLAUDE.md' &&
+      p.writes[0].content === G.pointerText() && p.writes[0].backupFirst === true);
+  }
+  check('oneClickPlan/in-sync + n/a: nothing to write',
+    G.oneClickPlan('in-sync', { claudeText: G.pointerText(), agentsText: '# a' }).writes.length === 0 &&
+    G.oneClickPlan('n/a', {}).writes.length === 0);
+
+  // -- §2a: buildHandoffDigest — Claude fixture -----------------------------
+  const claudeLines = fs.readFileSync(path.join(DD, 'handoff-claude.jsonl'), 'utf8')
+    .split('\n').filter((l) => l.trim());
+  const cd = H.buildHandoffDigest({ source: 'claude', entries: claudeLines, maxTurns: 20 });
+  check('handoff/claude: all five headings present',
+    /^# Handoff — from Claude Code$/m.test(cd) &&
+    /^## Goal \/ recent requests$/m.test(cd) && /^## Files touched$/m.test(cd) &&
+    /^## Commands run$/m.test(cd) && /^## Where we left off$/m.test(cd) && /^## Open items$/m.test(cd));
+  check('handoff/claude: files-touched from Edit(modified) + Write(created), commands from Bash',
+    /`src\/parser\.js` — modified/.test(cd) && /`src\/new-file\.js` — created/.test(cd) &&
+    /`npm test`/.test(cd));
+  check('handoff/claude: last-20-turns cap respected + reported in the header',
+    !/turn 01 —/.test(cd) && !/turn 02 —/.test(cd) && /turn 03 —/.test(cd) && /turn 22 —/.test(cd) &&
+    /_generated .+ · last 20 turns_/.test(cd));
+  check('handoff/claude: deterministic — byte-identical across two runs on the same input',
+    H.buildHandoffDigest({ source: 'claude', entries: claudeLines, maxTurns: 20 }) === cd);
+  check('handoff/claude: "where we left off" is the final assistant text',
+    /## Where we left off\n[\s\S]*wired the digest builder/.test(cd));
+  check('handoff/claude: open items lifted from the closing checklist',
+    /## Open items\n[\s\S]*- \[ \] hook up the Run-view button/.test(cd) &&
+    /- \[x\] write shared\/handoff\.js/.test(cd));
+  check('handoff/claude: tool_result user messages are NOT counted as human turns',
+    (cd.match(/^- turn \d\d —/gm) || []).length === 20);
+
+  // -- §2a: Codex fixture -------------------------------------------------
+  const codexLines = fs.readFileSync(path.join(DD, 'handoff-codex.jsonl'), 'utf8')
+    .split('\n').filter((l) => l.trim());
+  const xd = H.buildHandoffDigest({ source: 'codex', entries: codexLines, maxTurns: 20 });
+  check('handoff/codex: headings from patch_apply_begin / exec_command_begin / message role:user',
+    /^# Handoff — from Codex$/m.test(xd) && /`src\/app\.js` — modified/.test(xd) &&
+    /`npm run build`/.test(xd) && /- help me wire the codex side/.test(xd));
+  check('handoff/codex: developer / system blocks excluded from the goal + left sections',
+    !/user_instructions/.test(xd) && !/You are Codex/.test(xd));
+  check('handoff/codex: open items pulled from the "Next steps" list',
+    /- \[ \] add the codex path to settings/.test(xd));
+
+  // -- robustness -------------------------------------------------------
+  check('handoff: a malformed line mid-transcript is skipped, no throw, rest still extracted', (() => {
+    const withBad = claudeLines.slice(0, 4).concat(['{not valid json']).concat(claudeLines.slice(4));
+    const d = H.buildHandoffDigest({ source: 'claude', entries: withBad, maxTurns: 20 });
+    return /## Goal \/ recent requests/.test(d) && /turn 22 —/.test(d);
+  })());
+  check('handoff: an empty transcript still returns a valid doc with empty sections, never throws', (() => {
+    const d = H.buildHandoffDigest({ source: 'claude', entries: [], maxTurns: 20 });
+    return /## Files touched\n_\(none recorded\)_/.test(d) && /last 0 turns/.test(d) &&
+      /## Open items\n_\(none captured/.test(d);
+  })());
+  check('handoff: no source given -> defaults to Claude Code, never throws',
+    /from Claude Code/.test(H.buildHandoffDigest({ entries: [] })));
+  check('handoff: fixtures are synthetic (no real user dirs / tokens)', (() => {
+    const blob = fs.readFileSync(path.join(DD, 'handoff-claude.jsonl'), 'utf8') +
+      fs.readFileSync(path.join(DD, 'handoff-codex.jsonl'), 'utf8');
+    return !/[A-Za-z]:\\Users\\/.test(blob) && !/\/home\/[a-z]+\//.test(blob) &&
+      !/\/Users\/[a-z]+\//.test(blob) && !/ghp_[A-Za-z0-9]{20}/.test(blob);
+  })());
+
+  // -- §2c: prefillInput sets the input without submitting (webview unit) ---
+  const fakeInput = { value: 'stale', focus() { this.focused = true; }, setSelectionRange() {} };
+  const applied = win.AY.run.prefillInput(fakeInput, 'continue from the other agent');
+  check('v1.4 prefillInput: sets the input value + focuses, never submits',
+    applied === 'continue from the other agent' && fakeInput.value === applied && fakeInput.focused === true);
+
+  // -- extension.js wiring --------------------------------------------
+  const extSrc = fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8');
+  check('v1.4 extension: agentyard.handoff registered + routed from the webview + handoffCommand exists',
+    /registerCommand\('agentyard\.handoff'/.test(extSrc) &&
+    /msg\.type === 'handoff'/.test(extSrc) && /async function handoffCommand\(/.test(extSrc));
+  check('v1.4 extension: a single-backend install is a no-op info message (needs both backends)',
+    /enabled\.length < 2\)\s*{[\s\S]{0,180}showInformationMessage/.test(extSrc));
+  check('v1.4 extension: the pure builder writes <root>/.agentyard/HANDOFF.md',
+    /handoff\.buildHandoffDigest\(\{/.test(extSrc) &&
+    /path\.join\(root, '\.agentyard'\)/.test(extSrc) && /'HANDOFF\.md'/.test(extSrc));
+  check('v1.4 extension: guideline sync (§1 oneClickPlan) runs as a silent step 0',
+    /computeGuidelinePlan\(root\)/.test(extSrc) && /applyGuidelinePlan\(root, g\.plan\)/.test(extSrc) &&
+    /g\.sync !== 'in-sync'/.test(extSrc));
+  check('v1.4 extension: no network / URL in the handoff path (pure extraction, no LLM call)', (() => {
+    const s = extSrc.indexOf('async function handoffCommand');
+    return s !== -1 && !/https?:\/\//.test(extSrc.slice(s, s + 2600));
+  })());
+  check('v1.4 extension: Codex transcript lookup widens to the last 7 UTC day-dirs (handoff-only)',
+    /function findCodexTranscript\(/.test(extSrc) && /off < 7/.test(extSrc));
+  check('v1.4 extension: Claude transcript lookup derives the slug (non-alnum -> "-") + mtime fallback',
+    /function findClaudeTranscript\(/.test(extSrc) && /replace\(\/\[\^a-zA-Z0-9\]\/g, '-'\)/.test(extSrc));
+
+  // -- webview wiring -----------------------------------------------
+  const runSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'run.js'), 'utf8');
+  const termSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'term.js'), 'utf8');
+  const idxHtml = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'index.html'), 'utf8');
+  const adapterSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'adapter.js'), 'utf8');
+  const mainSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'main.js'), 'utf8');
+  const devSrc = fs.readFileSync(path.join(EXT_ROOT, 'scripts', 'dev-server.mjs'), 'utf8');
+  check('v1.4 webview: a handoff button on both feet, in index.html and getHtml, gated on >1 backend',
+    /id="run-handoff"/.test(idxHtml) && /id="run-handoff-feed"/.test(idxHtml) &&
+    /id="run-handoff"/.test(extSrc) && /id="run-handoff-feed"/.test(extSrc) &&
+    /agents\.length < 2/.test(runSrc) && /agents\.length < 2/.test(termSrc));
+  check('v1.4 webview: the button hands off INTO the active backend',
+    /adapter\.handoff\(backend\)/.test(runSrc) && /adapter\.handoff\(activeId\)/.test(termSrc));
+  check('v1.4 webview: prefillInput handled in both run.js and term.js; terminal pastes without a newline',
+    /msg\.event !== 'prefillInput'/.test(runSrc) && /msg\.event !== 'prefillInput'/.test(termSrc) &&
+    /term\.paste\(String\(msg\.text \|\| ''\)\)/.test(termSrc) && /prefillInput\(input, msg\.text\)/.test(runSrc));
+  check('v1.4 webview: adapter routes type:"handoff" replies + exposes a handoff() sender',
+    /msg\.type === 'handoff'/.test(adapterSrc) && /handoff\(to\)\s*{/.test(adapterSrc));
+  check('v1.4 webview: main.js exposes AY.showView so the handoff flow can bring the Run view forward',
+    /AY\.showView = showView/.test(mainSrc));
+  check('v1.4 dev-server: /api/handoff-sample renders the fixture through the pure builder',
+    /\/api\/handoff-sample/.test(devSrc) && /handoff\.buildHandoffDigest/.test(devSrc));
+
+  // -- package + changelog ------------------------------------------
+  check('v1.4: agentyard.handoff declared in contributes.commands',
+    (((pkg.contributes || {}).commands) || []).some((c) => c.command === 'agentyard.handoff'));
+  check('v1.4: config key count unchanged at 21 (handoff adds no settings)',
+    Object.keys((((pkg.contributes || {}).configuration || {}).properties) || {}).length === 21);
+  const changelog14 = fs.readFileSync(path.join(EXT_ROOT, 'CHANGELOG.md'), 'utf8');
+  check('v1.4: CHANGELOG has a 1.4.0 section mentioning the handoff',
+    /##\s*1\.4\.0/.test(changelog14) &&
+    /(handoff|이어받기)/i.test(changelog14.split('## 1.4.0')[1].split('\n## ')[0]));
+
+  // -- REGRESSION: the handoff feature moves nothing in the Claude-only scene
+  const officeA = win.AY.model.build({ departments, teamRoles, dataMode: 'demo' }, { projects, statuses });
+  const officeB = win.AY.model.build({ departments, teamRoles, dataMode: 'demo' }, { projects, statuses });
+  check('v1.4 regression: model.build output identical (handoff touches neither model.js nor live.js)',
+    JSON.stringify(officeA) === JSON.stringify(officeB) && !/handoff/i.test(JSON.stringify(officeA)));
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

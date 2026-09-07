@@ -214,6 +214,23 @@ html, body {
 .run-model-pick[data-default="no"] { color: #2ec4b6; border-color: #21514c; }
 #run-term-meta { font-size: 9px; color: var(--dim); }
 
+/* v1.4 cross-agent handoff ("이어받기") — a quiet, secondary button on the
+   backend-switcher row of both feet. Only shown when >1 backend is enabled. */
+.run-handoff {
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 9px;
+  padding: 3px 9px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.run-handoff[hidden] { display: none; }
+.run-handoff:hover { color: var(--text); border-color: #3d465f; }
+
 /* 📎 attach button — subtle, on both the terminal foot and the headless input row */
 #run-term-foot .attach-btn,
 #run-input-row .attach-btn {

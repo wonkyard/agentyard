@@ -40,6 +40,7 @@
       onboardSupported: false,
       sendMsg() {},
       onMsg() {},
+      handoff() {}, // v1.4: VS Code only — the browser preview button is a stub
       async runSample() {
         try {
           const res = await fetch('api/run-sample', { cache: 'no-store' });
@@ -117,7 +118,7 @@
         });
         return;
       }
-      if (msg.type === 'onboard' || msg.type === 'help' || msg.type === 'ui') {
+      if (msg.type === 'onboard' || msg.type === 'help' || msg.type === 'ui' || msg.type === 'handoff') {
         msgListeners.forEach((fn) => {
           try { fn(msg); } catch (e) { /* ignore */ }
         });
@@ -185,6 +186,10 @@
       },
       onMsg(fn) {
         if (typeof fn === 'function') msgListeners.push(fn);
+      },
+      // v1.4: "이어받기" — hand off INTO `to` (the backend the user is sitting on).
+      handoff(to) {
+        vscode.postMessage({ type: 'handoff', to: to ? String(to) : undefined });
       },
       onClip(fn) {
         if (typeof fn === 'function') clipListeners.push(fn);
