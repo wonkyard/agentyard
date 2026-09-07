@@ -110,6 +110,57 @@ function plan(s) {
   return { action: 'none', status: classify(s) };
 }
 
+/**
+ * The persistent panel chip (v1.2). Given the `classify()` sync label, decide
+ * what the chip says, how loud it looks, and what a click does. Pure so the
+ * sanity test can pin every case; the extension computes it into the snapshot
+ * and the webview just renders label/tone/action.
+ *
+ *   action 'setup'          → run `agentyard.setupGuidelines` (create / adopt flow)
+ *   action 'sync'           → re-point CLAUDE.md at @AGENTS.md (one modal confirm, backup first)
+ *   action 'create-pointer' → create a CLAUDE.md @AGENTS.md pointer next to AGENTS.md
+ *   action 'open'           → nothing to fix; just open AGENTS.md
+ *
+ * @param {string} sync  one of 'in-sync'|'only-agents'|'only-claude'|'diverged'|'n/a'
+ * @param {{claudeEnabled?:boolean, hasWorkspace?:boolean}} [opts]
+ * @returns {{show:boolean, tone:'ok'|'warn'|'muted', label:string, action:string, hint:string}}
+ */
+function chipState(sync, opts) {
+  opts = opts || {};
+  const claudeEnabled = opts.claudeEnabled !== false;
+  const hasWorkspace = opts.hasWorkspace !== false;
+  switch (sync) {
+    case 'in-sync':
+      return { show: true, tone: 'ok', label: 'guidelines in sync', action: 'open',
+        hint: 'CLAUDE.md imports AGENTS.md — both agents see the same instructions.' };
+    case 'diverged':
+      return { show: true, tone: 'warn', label: 'CLAUDE.md diverged', action: 'sync',
+        hint: 'CLAUDE.md is its own content. Click to re-point it at @AGENTS.md (a backup is saved first).' };
+    case 'only-agents':
+      return claudeEnabled
+        ? { show: true, tone: 'warn', label: 'no CLAUDE.md pointer', action: 'create-pointer',
+          hint: 'AGENTS.md exists but Claude Code has no CLAUDE.md. Click to add a @AGENTS.md pointer.' }
+        : { show: true, tone: 'ok', label: 'AGENTS.md set up', action: 'open',
+          hint: 'AGENTS.md is set up. Claude Code is not enabled, so no CLAUDE.md is needed.' };
+    case 'only-claude':
+      return { show: true, tone: 'warn', label: 'no AGENTS.md', action: 'setup',
+        hint: 'Only CLAUDE.md exists. Click to set up a canonical AGENTS.md.' };
+    case 'n/a':
+    default:
+      return { show: hasWorkspace, tone: 'muted', label: 'set up guidelines', action: 'setup',
+        hint: 'No AGENTS.md / CLAUDE.md yet. Click to scaffold them.' };
+  }
+}
+
+/**
+ * The "Sync now" write plan: CLAUDE.md becomes exactly `pointerText()`, and the
+ * existing file is backed up first. Pure — the extension resolves the path and
+ * does the fs work with the same `backupThenWrite` discipline as v1.1.
+ */
+function syncPointerPlan() {
+  return { file: 'CLAUDE.md', content: pointerText(), backupFirst: true };
+}
+
 module.exports = {
   IMPORT_LINE,
   POINTER_COMMENT,
@@ -120,4 +171,6 @@ module.exports = {
   mergedAgentsText,
   classify,
   plan,
+  chipState,
+  syncPointerPlan,
 };

@@ -150,7 +150,9 @@
 
     // ---- live activity ------------------------------------------------
     const live = root.AY && root.AY.live
-      ? root.AY.live.resolve(raw.liveEvents || [], { nowMs, idleSeconds, staleMs })
+      ? root.AY.live.resolve(raw.liveEvents || [], {
+        nowMs, idleSeconds, staleMs, codexEvents: raw.codexEvents || [],
+      })
       : { agents: [], sessions: [], agentTypes: [], lastActivityMs: 0, counts: {}, hasEvents: false };
 
     // fastest-changing live agent per subagent type, for department overlay
@@ -257,6 +259,26 @@
         model: 'live',
         occupants: shown.map(liveOccupant),
         overflow: Math.max(0, arr.length - shown.length),
+      });
+    }
+
+    // ---- Codex sessions (scope E): their own live rooms, no dept overlay --
+    // Codex has no per-agent ("department") files, so a Codex session is always
+    // a standalone live room — never overlaid onto a department, never merged
+    // into a Claude session. One room per session, newest first.
+    const codexAgents = live.agents
+      .filter((a) => a.kind === 'codex')
+      .sort((x, y) => String(y.ts || '').localeCompare(String(x.ts || '')));
+    for (const a of codexAgents) {
+      liveRooms.push({
+        id: 'live:codex:' + a.sessionId,
+        kind: 'live-codex',
+        title: a.name,
+        subtitle: a.leaving ? 'ended' : (a.status === 'blocked' ? 'blocked' : 'session'),
+        model: 'codex',
+        source: 'codex',
+        occupants: [liveOccupant(a)],
+        overflow: 0,
       });
     }
 

@@ -15,6 +15,33 @@
   const verEl = document.getElementById('brand-ver');
   if (verEl) verEl.textContent = cfg.version ? 'v' + cfg.version : '';
 
+  // ---- guideline sync chip (scope G) -----------------------------------
+  // The extension computes `guideline.chip` (label/tone/action) from the pure
+  // shared/guidelines.js helper; the webview just renders it and forwards the
+  // click intent. No chip logic lives here.
+  const chipEl = document.getElementById('guideline-chip');
+  function renderChip(guideline) {
+    if (!chipEl) return;
+    const chip = guideline && guideline.chip;
+    if (!chip || !chip.show) { chipEl.hidden = true; return; }
+    chipEl.hidden = false;
+    chipEl.textContent = chip.label;
+    chipEl.dataset.tone = chip.tone || 'muted';
+    chipEl.dataset.action = chip.action || 'open';
+    chipEl.title = chip.hint || chip.label;
+  }
+  if (chipEl) {
+    chipEl.addEventListener('click', () => {
+      const action = chipEl.dataset.action;
+      if (!action) return;
+      if (AY.adapter.sendMsg) {
+        AY.adapter.sendMsg({ type: 'ui', action: 'guidelineAction', which: action });
+      } else if (AY.adapter.runCommand) {
+        AY.adapter.runCommand('agentyard.setupGuidelines');
+      }
+    });
+  }
+
   // ---- office / run view toggle -----------------------------------------
   let officeVisible = true;
   (function wireToggle() {
@@ -160,6 +187,7 @@
       const dbResult = await AY.db.read(raw.dbBytes, AY.adapter.wasmUrl);
       office = AY.model.build(raw, dbResult);
       lastError = null;
+      renderChip(raw.guideline);
       if (AY.onboard && AY.onboard.onData) AY.onboard.onData(raw);
       const dataTag = office.dataMode === 'demo' ? 'SYNTHETIC demo data' : 'workspace data';
       const liveTag = office.liveMode === 'off' ? 'hooks off'

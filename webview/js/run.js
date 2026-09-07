@@ -33,7 +33,12 @@
         return { cls: 'ln-system', text: bits.join('  ·  ') };
       }
       case 'assistant':
+      case 'text': // Codex agent message (scope F) — rendered like an assistant line
         return { cls: 'ln-assistant', text: String(item.text || '') };
+      case 'prompt': // Codex echoed the initial user message
+        return { cls: 'ln-prompt', text: String(item.text || '') };
+      case 'error': // Codex error payload
+        return { cls: 'ln-error', text: String(item.text || '') };
       case 'tool':
         return {
           cls: 'ln-tool',
@@ -85,6 +90,8 @@
     reader.readAsArrayBuffer(file);
   }
 
+  const BACKEND_LABEL = { 'claude-code': 'Claude Code', codex: 'Codex' };
+
   function init() {
     const feed = document.getElementById('run-feed');
     const input = document.getElementById('run-input');
@@ -94,11 +101,17 @@
     const attachBtn = document.getElementById('run-attach');
     const meta = document.getElementById('run-meta');
     const hint = document.getElementById('run-hint');
+    const backendSwitch = document.getElementById('run-backend-switch-feed');
     if (!feed || !input) return;
 
+    const cfg = root.AY_CONFIG || {};
     const adapter = AY.adapter || {};
     const clip = AY.termclip || {};
     const supported = adapter.runSupported !== false;
+    // scope F: the headless feed is no longer Claude-Code-only. With more than
+    // one backend enabled a switcher picks which CLI `send()` spawns.
+    const agents = Array.isArray(cfg.agents) && cfg.agents.length ? cfg.agents.slice() : ['claude-code'];
+    let backend = agents[0];
     let running = false;
     let threadActive = false; // becomes true after a completed run -> next send resumes
     let sessionId = null;
@@ -147,6 +160,7 @@
 
     function updateMeta() {
       const parts = [];
+      if (agents.length > 1) parts.push(BACKEND_LABEL[backend] || backend);
       if (!supported) parts.push('run is available inside VS Code');
       else if (running) parts.push('running…');
       else if (threadActive) parts.push('thread active — next message continues it');
@@ -155,13 +169,33 @@
       meta.textContent = parts.join('   ·   ');
     }
 
+    function placeholderFor(id) {
+      return 'Send a prompt to ' + (BACKEND_LABEL[id] || id) + ' in this workspace…';
+    }
+
+    function setBackend(id) {
+      if (!agents.includes(id) || id === backend) return;
+      backend = id;
+      threadActive = false;
+      sessionId = null;
+      if (adapter.runNew) adapter.runNew();
+      addDivider('— switched to ' + (BACKEND_LABEL[id] || id) + ' —');
+      if (backendSwitch) {
+        for (const btn of backendSwitch.querySelectorAll('button')) {
+          btn.classList.toggle('on', btn.dataset.backend === id);
+        }
+      }
+      input.placeholder = placeholderFor(id);
+      updateMeta();
+    }
+
     function doSend() {
       if (!supported || running) return;
       const text = input.value.trim();
       if (!text) return;
       input.value = '';
       autosize();
-      if (adapter.runSend) adapter.runSend(text, threadActive);
+      if (adapter.runSend) adapter.runSend(text, threadActive, backend);
     }
 
     function autosize() {
@@ -256,11 +290,27 @@
       if (img) sendImageFile(adapter, img);
     });
 
+    // scope F: backend switcher for the headless feed (only when >1 enabled)
+    if (backendSwitch && agents.length > 1) {
+      backendSwitch.hidden = false;
+      for (const id of agents) {
+        const b = el('button', 'run-backend-btn', BACKEND_LABEL[id] || id);
+        b.type = 'button';
+        b.dataset.backend = id;
+        b.classList.toggle('on', id === backend);
+        b.addEventListener('click', () => { if (!running) setBackend(id); });
+        backendSwitch.appendChild(b);
+      }
+      input.placeholder = placeholderFor(backend);
+    }
+
     if (adapter.onRun) adapter.onRun(handle);
     setRunning(false);
 
     if (!supported) {
-      hint.textContent = 'Runs spawn the Claude Code CLI, which needs VS Code — this browser preview is layout only.';
+      hint.textContent = 'Runs spawn the ' +
+        (agents.length > 1 ? 'selected coding-agent' : (BACKEND_LABEL[backend] || backend)) +
+        ' CLI, which needs VS Code — this browser preview is layout only.';
       hint.hidden = false;
       if (adapter.runSample) {
         adapter.runSample().then((items) => {

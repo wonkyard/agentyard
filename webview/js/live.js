@@ -82,9 +82,95 @@
     return line;
   }
 
+  // ---- Codex sessions (v1.2 scope E) --------------------------------------
+  // shared/codexSessions.js already normalises a rollout transcript into
+  //   { ts, source:'codex', session_id, cwd, model, kind, doing, ended }
+  // The extension's CodexSessionLog tailer hands those here as opts.codexEvents.
+  // We fold them into the SAME working/idle/gone/blocked machine, keyed by a
+  // compound identity `source + ':' + session_id` so a Codex session id can
+  // never collide with a Claude Code session/agent id. Returns [] when there
+  // are no codex events — so the Claude-only scene is byte-for-byte unchanged.
+  function resolveCodexEvents(codexEvents, o) {
+    const list = (Array.isArray(codexEvents) ? codexEvents : [])
+      .filter((e) => e && typeof e === 'object' && e.session_id)
+      .map((e) => ({ e, m: ms(e.ts) }))
+      .sort((a, b) => a.m - b.m);
+    if (!list.length) return { agents: [], lastActivityMs: 0 };
+
+    const now = o.now;
+    const idleMs = o.idleMs;
+    const staleMs = o.staleMs;
+    const sess = new Map();
+    let lastActivityMs = 0;
+
+    for (const { e, m } of list) {
+      let s = sess.get(e.session_id);
+      if (!s) {
+        s = {
+          sessionId: e.session_id, cwd: e.cwd || null, model: e.model || null,
+          firstTs: m || 0, lastTs: 0, lastActivityTs: 0, doing: null,
+          blocked: false, blockedDoing: null, endedTs: 0,
+        };
+        sess.set(e.session_id, s);
+      }
+      if (e.cwd) s.cwd = e.cwd;
+      if (e.model) s.model = e.model;
+      if (m) { s.lastTs = Math.max(s.lastTs, m); lastActivityMs = Math.max(lastActivityMs, m); }
+
+      if (e.kind === 'ended' || e.ended) {
+        s.endedTs = m || now;
+        s.blocked = false;
+      } else if (e.kind === 'blocked') {
+        s.blocked = true;
+        s.blockedDoing = e.doing || 'blocked';
+        s.lastActivityTs = Math.max(s.lastActivityTs, m);
+      } else if (e.kind === 'activity') {
+        s.blocked = false;
+        s.lastActivityTs = Math.max(s.lastActivityTs, m);
+        if (e.doing) s.doing = e.doing;
+      }
+    }
+
+    const agents = [];
+    for (const s of sess.values()) {
+      const endedTs = s.endedTs;
+      if (endedTs && now - endedTs > LINGER_MS) continue; // gone
+      const newest = Math.max(s.lastTs, s.lastActivityTs);
+      if (!endedTs && staleMs > 0 && newest && now - newest > staleMs) continue; // zombie
+
+      let status;
+      if (endedTs) status = 'idle';
+      else if (s.blocked) status = 'blocked';
+      else if (s.lastActivityTs && now - s.lastActivityTs <= idleMs) status = 'working';
+      else status = 'idle';
+
+      const doing = s.blocked ? (s.blockedDoing || 'blocked') : (s.doing || 'working');
+      const lastTs = Math.max(s.lastTs, s.lastActivityTs, endedTs);
+      agents.push({
+        key: 'codex:' + s.sessionId,
+        kind: 'codex',
+        type: 'codex',
+        source: 'codex',
+        name: titleFromCwd(s.cwd),
+        model: s.model || 'codex',
+        sessionId: s.sessionId,
+        cwd: s.cwd,
+        status,
+        doing,
+        note: doing,
+        tool: null,
+        phase: null,
+        buildTarget: null,
+        ts: lastTs ? new Date(lastTs).toISOString() : null,
+        leaving: !!endedTs,
+      });
+    }
+    return { agents, lastActivityMs };
+  }
+
   /**
    * @param {Array} events  hook-event records
-   * @param {{nowMs?:number, idleSeconds?:number, staleMs?:number}} [opts]
+   * @param {{nowMs?:number, idleSeconds?:number, staleMs?:number, codexEvents?:Array}} [opts]
    * @returns {{agents:Array, sessions:Array, agentTypes:Array, lastActivityMs:number,
    *            counts:{working:number,idle:number,blocked:number}}}
    */
@@ -296,12 +382,23 @@
       });
     }
 
+    // ---- Codex sessions (scope E): additive, compound-keyed ----------
+    const codex = resolveCodexEvents(opts.codexEvents, { now, idleMs, staleMs });
+    for (const a of codex.agents) {
+      outAgents.push(a);
+      counts[a.status] = (counts[a.status] || 0) + 1;
+    }
+    if (codex.lastActivityMs) lastActivityMs = Math.max(lastActivityMs, codex.lastActivityMs);
+
     const typeSet = new Set();
     for (const a of outAgents) if (a.kind === 'subagent') typeSet.add(a.type);
 
     const outSessions = [];
     for (const s of sessions.values()) {
-      const mine = outAgents.filter((a) => a.sessionId === s.sessionId);
+      // Codex agents carry a session_id too; they get their own rooms in
+      // model.js and must never be folded into a Claude session that happens
+      // to share the raw id string (compound-key isolation, scope E).
+      const mine = outAgents.filter((a) => a.sessionId === s.sessionId && a.kind !== 'codex');
       if (!mine.length) continue;
       outSessions.push({
         sessionId: s.sessionId,

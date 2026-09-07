@@ -2,6 +2,37 @@
 
 All notable changes to Agentyard are recorded here.
 
+## 1.2.0
+
+Codex becomes a true equal of Claude Code inside Agentyard. Everything is
+additive — a Claude-Code-only install (`agentyard.agents` still defaults to
+`["claude-code"]`) renders byte-for-byte the same scene as v1.1.0.
+
+- **Codex shows up in the office (scope E).** A new `CodexSessionLog` tailer
+  (started only when Codex is enabled) does a bounded, incremental tail of
+  `~/.codex/sessions/**/rollout-*.jsonl` — today + yesterday only, newest N
+  files — through the pure `shared/codexSessions.js` normaliser. Codex sessions
+  render as their own live rooms (`source:'codex'`, a fixed codex-blue accent,
+  no department overlay), folded into the same working / idle / gone / blocked
+  state machine as Claude Code under a compound identity key
+  `source + ':' + session_id`, so a Codex id can never collide with a Claude
+  Code session/agent id. `~/.codex` missing is inert — no error, no log spam.
+- **Headless Codex in the Run feed (scope F).** The NDJSON Run feed is no longer
+  Claude-Code-only. `buildHeadlessCodexArgs()` builds `codex exec "<prompt>"
+  --json` (prompt always its own argv element — never shell-interpolated;
+  resume -> `codex exec resume <id> "<prompt>" --json`; `agentyard.codexExtraArgs`
+  appended verbatim), and the new pure `shared/codexExec.js` parses the stream
+  into the same feed items the webview already renders. `RunController` is
+  backend-aware; the v1.1 "use the terminal Run view" refusal is gone; Cancel /
+  resume / one-run-at-a-time apply to Codex unchanged. With more than one
+  backend enabled the headless feed gets a `Claude Code | Codex` switcher.
+- **A visible guideline sync control (scope G).** A persistent chip in the panel
+  header shows the guideline sync state at a glance (`in sync` / `diverged` /
+  `no CLAUDE.md pointer` / ...). Clicking it runs the right action: set up, or
+  **Sync now** -- re-point `CLAUDE.md` at `@AGENTS.md` with one modal confirm and
+  a `.agentyard-backup` written first (same discipline as v1.1). The
+  state -> label + action mapping is a pure helper (`guidelines.chipState`).
+
 ## 1.1.0
 
 Agentyard is no longer Claude-Code-only. Everything is additive and

@@ -11,12 +11,15 @@ const {
   buildClaudeArgs,
   buildInteractiveClaudeArgs,
   buildInteractiveCodexArgs,
+  buildHeadlessCodexArgs,
   candidateCommands,
 } = require('./shared/claudeArgs.js');
 const { needsCmdWrap, resolveLauncher } = require('./shared/winWrap.js');
 const claudeResolve = require('./shared/claudeResolve.js');
 const guidelines = require('./shared/guidelines.js');
+const codexSessions = require('./shared/codexSessions.js');
 const { StreamJsonParser } = require('./shared/streamJson.js');
+const { CodexExecParser } = require('./shared/codexExec.js');
 const { killTree, spawnGroupOpts } = require('./shared/killTree.js');
 const attach = require('./shared/attach.js');
 const pkg = require('./package.json');
@@ -113,6 +116,12 @@ const AGENTYARD_DIR = path.join(os.homedir(), '.claude', 'agentyard');
 const HOOK_SCRIPT = path.join(AGENTYARD_DIR, 'agentyard-hook.mjs');
 const USER_SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
 const EVENTS_DIR = AGENTYARD_DIR;
+
+// Codex rollout transcripts (v1.2 scope E). ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
+const CODEX_SESSIONS_DIR = path.join(os.homedir(), '.codex', 'sessions');
+// LiveLog has no explicit file-count cap (it caps events, not files); a bounded
+// poll of the Codex tree needs one, so this is the Codex-side equivalent.
+const CODEX_FILE_CAP = 12;
 
 const PRUNE_INTERVAL_MS = 5 * 60 * 1000; // housekeeping cadence for the event log
 const STALE_FILE_MS = 2 * 60 * 60 * 1000; // silence after which an events file is dead
@@ -496,6 +505,115 @@ class LiveLog {
   }
 }
 
+// ---- Codex session log (v1.2 scope E) --------------------------------
+// A sibling of LiveLog for Codex rollout transcripts. Behaviour mirrors LiveLog:
+// a bounded scan of ~/.codex/sessions/ (today + yesterday date dirs only, capped
+// at the N most-recent rollout-*.jsonl), an incremental byte-offset tail that
+// feeds only complete new lines to shared/codexSessions.js (a partial trailing
+// line waits for the next poll), and no error / log spam when ~/.codex/sessions
+// is missing. Polled on the same tick as LiveLog (OfficeViewProvider.pushData) —
+// no new timer, no FileSystemWatcher.
+class CodexSessionLog {
+  constructor() {
+    this.offsets = new Map(); // file -> bytes consumed
+    this.partial = new Map(); // file -> leftover partial line
+    this.meta = new Map();    // file -> { session_id, cwd } carried across polls
+    this.events = [];         // normalised events, newest last, capped
+  }
+
+  start() {
+    this.poll();
+  }
+
+  stop() {
+    /* no watcher / timer of its own */
+  }
+
+  // Today + yesterday UTC date dirs only, most-recent rollout files first, capped.
+  listFiles() {
+    const out = [];
+    const now = new Date();
+    for (const offDays of [0, 1]) {
+      const d = new Date(now.getTime() - offDays * 86400000);
+      const dir = path.join(
+        CODEX_SESSIONS_DIR,
+        String(d.getUTCFullYear()),
+        String(d.getUTCMonth() + 1).padStart(2, '0'),
+        String(d.getUTCDate()).padStart(2, '0')
+      );
+      let names;
+      try {
+        names = fs.readdirSync(dir);
+      } catch (e) {
+        continue; // missing date dir — inert, no error
+      }
+      for (const n of names) {
+        if (!/^rollout-.*\.jsonl$/.test(n)) continue;
+        const p = path.join(dir, n);
+        try {
+          out.push({ p, mtime: fs.statSync(p).mtimeMs });
+        } catch (e) {
+          /* vanished between readdir and stat */
+        }
+      }
+    }
+    out.sort((a, b) => b.mtime - a.mtime);
+    return out.slice(0, CODEX_FILE_CAP).map((x) => x.p);
+  }
+
+  poll() {
+    for (const f of this.listFiles()) this.ingestFile(f);
+    if (this.events.length > 4000) this.events = this.events.slice(-4000);
+  }
+
+  ingestFile(file) {
+    let stat;
+    try {
+      stat = fs.statSync(file);
+    } catch (e) {
+      return;
+    }
+    let from = this.offsets.get(file) || 0;
+    if (stat.size < from) {
+      from = 0; // truncated / rotated
+      this.partial.set(file, '');
+      this.meta.delete(file);
+    }
+    if (stat.size === from) return;
+    let chunk = '';
+    try {
+      const fd = fs.openSync(file, 'r');
+      const buf = Buffer.alloc(stat.size - from);
+      fs.readSync(fd, buf, 0, buf.length, from);
+      fs.closeSync(fd);
+      chunk = buf.toString('utf8');
+    } catch (e) {
+      return;
+    }
+    this.offsets.set(file, stat.size);
+    const text = (this.partial.get(file) || '') + chunk;
+    const lines = text.split('\n');
+    this.partial.set(file, lines.pop() || ''); // trailing partial waits for next poll
+
+    // shared/codexSessions.js carries session_id / cwd forward WITHIN one call;
+    // across incremental polls the leading session_meta was already consumed, so
+    // seed from what we saw last time and remember what we see now.
+    const seed = this.meta.get(file) || {};
+    for (const ev of codexSessions.normalize(lines)) {
+      if (!ev.session_id && seed.session_id) ev.session_id = seed.session_id;
+      if (!ev.cwd && seed.cwd) ev.cwd = seed.cwd;
+      if (ev.session_id) seed.session_id = ev.session_id;
+      if (ev.cwd) seed.cwd = ev.cwd;
+      if (ev.session_id) this.events.push(ev);
+    }
+    this.meta.set(file, seed);
+  }
+
+  recent() {
+    return this.events.length > 1500 ? this.events.slice(-1500) : this.events;
+  }
+}
+
 // ---- hooks in settings.json -----------------------------------------
 function hooksInstalled() {
   const candidates = [USER_SETTINGS];
@@ -630,7 +748,8 @@ class RunController {
     this.post = post; // (msg) => void, to the webview
     this.child = null;
     this.parser = null;
-    this.sessionId = null; // last claude session id, for --resume
+    this.sessionId = null; // last CLI session id, for --resume / `codex exec resume`
+    this.backendId = 'claude-code'; // scope F: which CLI the last/next run uses
     this.running = false;
     this.stderrBuf = '';
   }
@@ -645,6 +764,7 @@ class RunController {
       event: 'status',
       running: this.running,
       sessionId: this.sessionId,
+      backend: this.backendId,
       hasWorkspace: !!workspaceRoot(),
     });
   }
@@ -655,22 +775,24 @@ class RunController {
     this.pushStatus();
   }
 
-  send(prompt, resume) {
+  send(prompt, resume, backend) {
     if (this.running) {
       this.post({ type: 'run', event: 'error', message: 'A run is already in progress.' });
       return;
     }
     prompt = String(prompt == null ? '' : prompt);
     if (!prompt.trim()) return;
-    // The headless feed is Claude Code only (v1.1). A Codex-only install must use
-    // the interactive terminal Run view — headless Codex is a v1.2 follow-up.
-    if (enabledAgents().indexOf('claude-code') === -1) {
-      this.post({
-        type: 'run', event: 'error',
-        message: 'The headless Run view supports Claude Code only. Set agentyard.runView to "terminal" to use Codex.',
-      });
-      return;
-    }
+
+    // scope F: the headless feed is backend-aware. Pick the requested backend if
+    // it is enabled, else the first enabled backend. A Codex-only install now
+    // streams `codex exec … --json` into this same feed instead of being told
+    // to switch to the terminal Run view.
+    const enabled = enabledAgents();
+    const wanted = typeof backend === 'string' && enabled.indexOf(backend) !== -1 ? backend : null;
+    this.backendId = wanted || enabled[0] || 'claude-code';
+    // A backend switch invalidates the resume id (it belongs to the other CLI).
+    if (!resume) this.sessionId = null;
+
     const root = workspaceRoot();
     if (!root) {
       this.post({ type: 'run', event: 'error', message: 'Open a workspace folder first — runs use the folder as the working directory.' });
@@ -680,26 +802,36 @@ class RunController {
     const cfg = vscode.workspace.getConfiguration('agentyard');
     let built;
     try {
-      built = buildClaudeArgs({
-        claudePath: cfg.get('claudePath', 'claude'),
-        prompt,
-        resume: resume ? this.sessionId : null,
-        permissionMode: cfg.get('claudePermissionMode', 'default'),
-        extraArgs: cfg.get('claudeExtraArgs', []),
-      });
+      if (this.backendId === 'codex') {
+        built = buildHeadlessCodexArgs({
+          codexPath: cfg.get('codexPath', 'codex'),
+          prompt,
+          resumeId: resume ? this.sessionId : null,
+          extraArgs: cfg.get('codexExtraArgs', []),
+        });
+      } else {
+        built = buildClaudeArgs({
+          claudePath: cfg.get('claudePath', 'claude'),
+          prompt,
+          resume: resume ? this.sessionId : null,
+          permissionMode: cfg.get('claudePermissionMode', 'default'),
+          extraArgs: cfg.get('claudeExtraArgs', []),
+        });
+      }
     } catch (e) {
       this.post({ type: 'run', event: 'error', message: 'Bad Agentyard run config: ' + e.message });
       return;
     }
 
     const candidates = candidateCommands(built.command, process.platform);
-    this.parser = new StreamJsonParser();
+    this.parser = this.backendId === 'codex' ? new CodexExecParser() : new StreamJsonParser();
     this.stderrBuf = '';
     this.running = true;
     this.post({
       type: 'run',
       event: 'started',
       prompt,
+      backend: this.backendId,
       resumed: !!(resume && this.sessionId),
       resumeId: resume ? this.sessionId : null,
     });
@@ -713,7 +845,8 @@ class RunController {
         claudeResolve.friendlySpawnMessage(
           { message: 'not found on PATH' },
           candidates[0],
-          process.platform
+          process.platform,
+          this.backendId
         )
       );
       return;
@@ -754,14 +887,14 @@ class RunController {
       child = cp.spawn(file, spawnArgs, opts);
     } catch (e) {
       if (i + 1 < candidates.length) { this._spawn(candidates, i + 1, args, cwd); return; }
-      this._fail(claudeResolve.friendlySpawnMessage(e, candidates[0], process.platform));
+      this._fail(claudeResolve.friendlySpawnMessage(e, candidates[0], process.platform, this.backendId));
       return;
     }
     this.child = child;
 
-    // The prompt is passed as an argv (`-p "<prompt>"`) and nothing is piped
-    // in, so close stdin immediately — otherwise `claude -p` waits on it and
-    // prints "no stdin data received in 3s" to stderr.
+    // The prompt is passed as an argv element and nothing is piped in, so close
+    // stdin immediately — otherwise `claude -p` waits on it and prints "no stdin
+    // data received in 3s" to stderr (Codex `exec` is unaffected either way).
     if (child.stdin) {
       try { child.stdin.end(); } catch (e) { /* ignore */ }
     }
@@ -775,10 +908,10 @@ class RunController {
         return;
       }
       if (!sawData && claudeResolve.isExecFailure(err)) {
-        this._fail(claudeResolve.friendlySpawnMessage(err, candidates[0], process.platform));
+        this._fail(claudeResolve.friendlySpawnMessage(err, candidates[0], process.platform, this.backendId));
         return;
       }
-      this._fail('claude process error: ' + err.message);
+      this._fail((this.backendId === 'codex' ? 'codex' : 'claude') + ' process error: ' + err.message);
     });
 
     if (child.stdout) {
@@ -1067,6 +1200,7 @@ function getHtml(webview, extUri, context) {
     <header id="topbar">
       <span class="brand">AGENTYARD<span class="ver" id="brand-ver"></span></span>
       <button type="button" id="help-btn" title="도움말 · 설정 안내" aria-label="도움말 열기">?</button>
+      <button type="button" id="guideline-chip" hidden></button>
       <span id="view-toggle">
         <button type="button" data-view="office" class="on">Office</button>
         <button type="button" data-view="run">Run</button>
@@ -1098,6 +1232,7 @@ function getHtml(webview, extUri, context) {
           <button type="button" id="run-cancel" hidden>Cancel</button>
         </div>
         <div id="run-foot">
+          <span id="run-backend-switch-feed" hidden></span>
           <button type="button" id="run-new">New thread</button>
           <span id="run-meta"></span>
         </div>
@@ -1112,9 +1247,10 @@ function getHtml(webview, extUri, context) {
 </html>`;
 }
 
-function collectSnapshot(live) {
+function collectSnapshot(live, codexLive) {
   const p = paths();
   const cfg = vscode.workspace.getConfiguration('agentyard');
+  const codexEnabled = enabledAgents().indexOf('codex') !== -1;
   // v1.1: a missing company.db is NOT an error. The roster + live activity
   // drive the scene; the board / annex layers just stay empty.
   let dbBase64 = '';
@@ -1124,7 +1260,7 @@ function collectSnapshot(live) {
     dbBase64 = '';
   }
   const departments = p.dataMode === 'demo' ? readAgentDir(p.depts) : readRoster(p.depts);
-  return {
+  const snap = {
     type: 'data',
     dataMode: p.dataMode,
     departments,
@@ -1145,20 +1281,33 @@ function collectSnapshot(live) {
     agents: enabledAgents(),
     guideline: guidelineState(p.root),
   };
+  // scope E: only carry codexEvents when Codex is an enabled backend — a
+  // Claude-Code-only install gets no key at all, so the scene is unchanged.
+  if (codexEnabled && codexLive) snap.codexEvents = codexLive.recent();
+  return snap;
 }
 
 // Presence + sync state of the enabled backends' instruction files at the
 // workspace root. A hint for the banner / guidelines command — never an error.
 function guidelineState(root) {
-  if (!root) return { agentsMd: 'absent', claudeMd: 'absent', sync: 'n/a' };
+  const claudeEnabled = enabledAgents().indexOf('claude-code') !== -1;
+  if (!root) {
+    return {
+      agentsMd: 'absent', claudeMd: 'absent', sync: 'n/a',
+      chip: guidelines.chipState('n/a', { claudeEnabled, hasWorkspace: false }),
+    };
+  }
   const aText = safeRead(path.join(root, 'AGENTS.md'));
   const cText = safeRead(path.join(root, 'CLAUDE.md'));
   const a = !!aText.trim();
   const c = !!cText.trim();
+  const sync = guidelines.classify({ agentsMd: a, claudeMd: c, claudeText: cText });
   return {
     agentsMd: a ? 'present' : 'absent',
     claudeMd: !c ? 'absent' : (guidelines.isPointer(cText) ? 'pointer' : 'present'),
-    sync: guidelines.classify({ agentsMd: a, claudeMd: c, claudeText: cText }),
+    sync,
+    // scope G: the pure helper decides label / tone / action; the webview renders it.
+    chip: guidelines.chipState(sync, { claudeEnabled, hasWorkspace: true }),
   };
 }
 
@@ -1287,6 +1436,10 @@ function buildDiagnostics() {
   const cx = diagnoseCodex();
   L.push('codex (configured) : ' + cx.command);
   L.push('codex (resolved)   : ' + (cx.resolved || 'NOT FOUND on PATH or common install dirs'));
+  if (enabledAgents().indexOf('codex') !== -1) {
+    L.push('codex sessions dir : ' + CODEX_SESSIONS_DIR +
+      (fs.existsSync(CODEX_SESSIONS_DIR) ? '' : ' (missing — no Codex office rooms yet)'));
+  }
   L.push('PATH dirs added    : ' + (aug.added.length ? aug.added.join(', ') : '(none — PATH already had them or they do not exist)'));
   L.push('');
   L.push('node-pty          : ' + (nodePty ? 'loaded' : 'NOT loaded — ' + (nodePtyError || 'unknown') + ' (Run view falls back to headless)'));
@@ -1320,6 +1473,8 @@ class OfficeViewProvider {
     this.timer = null;
     this.watchers = [];
     this.live = new LiveLog(() => this.pushData());
+    // scope E: Codex rollout tailer, polled on the same tick as `live` (pushData).
+    this.codexLive = new CodexSessionLog();
     this.run = new RunController((m) => {
       if (this.view) this.view.webview.postMessage(m);
     });
@@ -1344,7 +1499,12 @@ class OfficeViewProvider {
 
   pushData() {
     if (!this.view) return;
-    this.view.webview.postMessage(collectSnapshot(this.live));
+    // scope E: poll the Codex tailer on the same tick — only when Codex is
+    // enabled, so a Claude-Code-only install never touches ~/.codex.
+    if (this.codexLive && enabledAgents().indexOf('codex') !== -1) {
+      try { this.codexLive.poll(); } catch (e) { /* inert on any fs hiccup */ }
+    }
+    this.view.webview.postMessage(collectSnapshot(this.live, this.codexLive));
   }
 
   post(msg) {
@@ -1526,6 +1686,20 @@ class OfficeViewProvider {
       openCodexTerminal();
     } else if (msg.action === 'setupGuidelines') {
       vscode.commands.executeCommand('agentyard.setupGuidelines');
+    } else if (msg.action === 'guidelineAction') {
+      // scope G: the header chip was clicked. 'sync' / 'create-pointer' → a
+      // one-confirm re-point of CLAUDE.md; 'open' → just open AGENTS.md;
+      // anything else ('setup') → the full create/adopt flow.
+      if (msg.which === 'sync' || msg.which === 'create-pointer') {
+        syncGuidelinesCommand(this, msg.which);
+      } else if (msg.which === 'open') {
+        const root = workspaceRoot();
+        if (root) {
+          vscode.commands.executeCommand('vscode.open', vscode.Uri.file(path.join(root, 'AGENTS.md')));
+        }
+      } else {
+        vscode.commands.executeCommand('agentyard.setupGuidelines');
+      }
     } else if (msg.action === 'openExternal' && msg.url) {
       try { vscode.env.openExternal(vscode.Uri.parse(String(msg.url))); } catch (e) { /* ignore */ }
     } else if (msg.action === 'liveMode') {
@@ -1545,6 +1719,7 @@ class OfficeViewProvider {
   dispose() {
     this.stop();
     this.live.stop();
+    this.codexLive.stop();
     this.run.dispose();
     this.disposeTerms();
   }
@@ -1590,7 +1765,7 @@ class OfficeViewProvider {
         }
       }
       if (msg.type === 'run') {
-        if (msg.action === 'send') this.run.send(msg.prompt, !!msg.resume);
+        if (msg.action === 'send') this.run.send(msg.prompt, !!msg.resume, msg.backend);
         else if (msg.action === 'cancel') this.run.cancel();
         else if (msg.action === 'new') { this.run.newThread(); this.clearAttachments(); }
         else if (msg.action === 'status') this.run.pushStatus();
@@ -1680,6 +1855,7 @@ function activate(context) {
   const provider = new OfficeViewProvider(context);
   maybeSeedAgents(context);
   provider.live.start();
+  provider.codexLive.start();
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('agentyard.office', provider, {
@@ -1824,6 +2000,42 @@ async function setupGuidelinesCommand(provider) {
       await openAgents();
     }
   }
+}
+
+// scope G: the "Sync now" / "create pointer" action behind the header chip.
+// A single modal confirm, then re-point CLAUDE.md at @AGENTS.md with the v1.1
+// backup discipline (.agentyard-backup first, never a silent clobber). Falls
+// back to the full setup flow when there is no AGENTS.md to point at yet.
+async function syncGuidelinesCommand(provider, mode) {
+  const root = workspaceRoot();
+  if (!root) {
+    vscode.window.showWarningMessage('Open a workspace folder first — guidelines live at its root.');
+    return;
+  }
+  const agentsPath = path.join(root, 'AGENTS.md');
+  const claudePath = path.join(root, 'CLAUDE.md');
+  if (!safeRead(agentsPath).trim()) {
+    // nothing canonical to point at — run the real create/adopt flow instead
+    return setupGuidelinesCommand(provider);
+  }
+  const plan = guidelines.syncPointerPlan(); // { file:'CLAUDE.md', content: pointerText(), backupFirst:true }
+  const prompt = mode === 'create-pointer'
+    ? 'Create CLAUDE.md as a one-line "@AGENTS.md" pointer so Claude Code and Codex share AGENTS.md?'
+    : 'Re-point CLAUDE.md at "@AGENTS.md"? Your current CLAUDE.md is backed up to ' +
+      'CLAUDE.md.agentyard-backup first.';
+  const ok = await vscode.window.showInformationMessage(prompt, { modal: true }, 'Sync now');
+  if (ok !== 'Sync now') return;
+  try {
+    if (plan.backupFirst && fs.existsSync(claudePath)) {
+      fs.copyFileSync(claudePath, claudePath + '.agentyard-backup');
+    }
+    fs.writeFileSync(claudePath, plan.content);
+  } catch (e) {
+    vscode.window.showErrorMessage('Agentyard could not write ' + claudePath + ': ' + e.message);
+    return;
+  }
+  vscode.window.showInformationMessage('CLAUDE.md now points at AGENTS.md. A backup was saved.');
+  if (provider) provider.pushData();
 }
 
 function deactivate() {}
