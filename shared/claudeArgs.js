@@ -151,8 +151,8 @@ function buildInteractiveCodexArgs(opts) {
  * renders for Claude. Pure: the extension does the spawn.
  *
  * Shape (from the Codex CLI facts in the v1.2 brief / `.claude/agents/agentyard.md`):
- *   fresh   →  codex exec "<prompt>" --json  [extraArgs…]
- *   resume  →  codex exec resume <id> "<prompt>" --json  [extraArgs…]
+ *   fresh   →  codex exec --json [extraArgs…] -- "<prompt>"
+ *   resume  →  codex exec resume --json [extraArgs…] -- <id> "<prompt>"
  *
  * The prompt is ALWAYS its own argv element — never interpolated into a shell
  * string (same rule as `buildClaudeArgs`; Windows `.cmd` handling is in
@@ -176,8 +176,8 @@ function buildHeadlessCodexArgs(opts) {
 
   const resumeId = cleanStr(opts.resumeId);
   const args = ['exec'];
-  if (resumeId) args.push('resume', resumeId);
-  args.push(prompt, '--json');
+  if (resumeId) args.push('resume');
+  args.push('--json');
 
   // model flag sits with the other `codex exec` flags, before codexExtraArgs.
   args.push(...modelArgs(opts.model));
@@ -186,6 +186,11 @@ function buildHeadlessCodexArgs(opts) {
   for (const a of extra) {
     if (typeof a === 'string' && a.length) args.push(a);
   }
+
+  // End option parsing so a prompt starting with a dash stays literal.
+  args.push('--');
+  if (resumeId) args.push(resumeId);
+  args.push(prompt);
 
   const command = cleanStr(opts.codexPath) || 'codex';
   return { command, args, prompt };

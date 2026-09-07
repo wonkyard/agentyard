@@ -222,6 +222,18 @@ function recordClaudeTool(b, acc) {
 
 // ---- Codex rollout transcript --------------------------------------------
 function scanCodex(rec, acc) {
+  // SQLite adapter: keep one accumulator/rendering path for both stores.
+  if (rec.source === 'codex' && rec.kind) {
+    if (rec.role === 'user') pushTurn(acc, rec.text);
+    if (rec.role === 'assistant' && typeof rec.text === 'string' && rec.text.trim()) {
+      acc.assistantTexts.push(rec.text.trim());
+    }
+    if (rec.command) addCommand(acc, rec.command);
+    if (Array.isArray(rec.files)) for (const f of rec.files) {
+      if (f && typeof f.path === 'string') addFile(acc, f.path, f.mode);
+    }
+    return;
+  }
   const outer = rec.type;
   const p = rec.payload && typeof rec.payload === 'object' ? rec.payload : rec;
   const ptype = p.type || outer;

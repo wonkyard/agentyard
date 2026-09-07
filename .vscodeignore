@@ -5,6 +5,9 @@
 node_modules/**
 scripts/**
 reports/**
+state/**
+**/*.sqlite
+**/*.sqlite-*
 dev-data/real/**
 dev-data/*.jsonl
 media/screenshots/*.psd
