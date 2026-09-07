@@ -188,6 +188,7 @@
       office = AY.model.build(raw, dbResult);
       lastError = null;
       renderChip(raw.guideline);
+      if (AY.modelpick && AY.modelpick.onData) AY.modelpick.onData(raw.model);
       if (AY.onboard && AY.onboard.onData) AY.onboard.onData(raw);
       const dataTag = office.dataMode === 'demo' ? 'SYNTHETIC demo data' : 'workspace data';
       const liveTag = office.liveMode === 'off' ? 'hooks off'

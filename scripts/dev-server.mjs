@@ -20,6 +20,7 @@ const require = createRequire(import.meta.url);
 const { toDepartments } = require('../shared/frontmatter.js');
 const { StreamJsonParser } = require('../shared/streamJson.js');
 const guidelines = require('../shared/guidelines.js');
+const modelPick = require('../shared/modelPick.js');
 const codexSessions = require('../shared/codexSessions.js');
 const PKG_VERSION = require('../package.json').version;
 
@@ -116,6 +117,19 @@ function devGuideline() {
   };
 }
 
+// scope C: a stubbed model-picker state so the Run-header control renders in the
+// browser preview. AGENTYARD_CLAUDE_MODEL / AGENTYARD_CODEX_MODEL override.
+function devModel() {
+  const values = {
+    claudeModel: process.env.AGENTYARD_CLAUDE_MODEL || '',
+    codexModel: process.env.AGENTYARD_CODEX_MODEL || '',
+  };
+  return {
+    'claude-code': modelPick.pickerState('claude-code', values),
+    codex: modelPick.pickerState('codex', values),
+  };
+}
+
 const PORT = Number(process.env.PORT || 4173);
 
 const MIME = {
@@ -195,6 +209,7 @@ const server = http.createServer((req, res) => {
         departments: readAgentDir(DEPT_DIR),
         teamRoles: readAgentDir(TEAM_DIR),
         guideline: devGuideline(),
+        model: devModel(),
       });
     }
     if (url.startsWith('/api/events')) {

@@ -45,6 +45,7 @@
     const attachBtn = document.getElementById('run-term-attach');
     const metaEl = document.getElementById('run-term-meta');
     const switchEl = document.getElementById('run-backend-switch');
+    const modelPickEl = document.getElementById('run-model-pick');
     const feedEl = document.getElementById('run-feed');
     const barEl = document.getElementById('run-bar');
     if (!termEl) return;
@@ -152,6 +153,11 @@
       }
     }
 
+    // scope C: the model control tracks the active backend's model setting.
+    if (modelPickEl && AY.modelpick && AY.modelpick.attach) {
+      AY.modelpick.attach(modelPickEl, () => activeId);
+    }
+
     function setActive(id) {
       if (!backends.has(id)) return;
       activeId = id;
@@ -161,6 +167,7 @@
           btn.classList.toggle('on', btn.dataset.backend === id);
         }
       }
+      if (AY.modelpick && AY.modelpick.refresh) AY.modelpick.refresh();
       if (metaEl) {
         metaEl.textContent = 'interactive ' + (LABEL[id] || id) +
           ' — permission prompts are answered here';
