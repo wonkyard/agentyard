@@ -2,7 +2,7 @@
   "name": "agentyard",
   "displayName": "Agentyard",
   "description": "A pixel-art view of your agent company, in the VS Code panel. Works with Claude Code and Codex.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "publisher": "wonkyard",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -168,6 +168,11 @@
           "default": [],
           "description": "Extra arguments appended verbatim when the Run view launches the Claude Code CLI, e.g. [\"--model\", \"opus\"] or [\"--allowedTools\", \"Read Edit Bash(npm test)\"]."
         },
+        "agentyard.claudeModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model passed as --model when the Run view launches Claude Code (interactive terminal and headless feed). Known aliases: default, sonnet, opus, haiku, opusplan; a full model id also works. Leave blank to let Claude Code decide — no flag is added. Set it from the model picker in the Run header."
+        },
         "agentyard.codexPath": {
           "type": "string",
           "default": "codex",
@@ -179,7 +184,12 @@
             "type": "string"
           },
           "default": [],
-          "description": "Extra arguments appended verbatim when the Run view launches the Codex CLI. Anything Codex needs (model, sandbox, approval flags) goes here — Agentyard does not map any Codex flags by default."
+          "description": "Extra arguments appended verbatim when the Run view launches the Codex CLI. Anything Codex needs (sandbox, approval flags) goes here — Agentyard does not map any Codex flags by default. The model has its own setting (agentyard.codexModel) and picker."
+        },
+        "agentyard.codexModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model passed as --model when the Run view launches Codex (interactive terminal and headless `codex exec`). Free-text — Codex model names change often and vary by auth. Leave blank to use ~/.codex/config.toml or the CLI default (no flag added). Set it from the model picker in the Run header."
         },
         "agentyard.claudePermissionMode": {
           "type": "string",

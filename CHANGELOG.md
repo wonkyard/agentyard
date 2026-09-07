@@ -2,6 +2,36 @@
 
 All notable changes to Agentyard are recorded here.
 
+## 1.3.0
+
+A per-backend model picker in the Run view. Additive and backward-compatible —
+with both model settings blank Agentyard passes no `--model` flag, so each CLI's
+own default / config wins exactly as before, and a Claude-Code-only scene renders
+byte-for-byte the same.
+
+- **New settings (scope A).** `agentyard.claudeModel` and `agentyard.codexModel`,
+  both strings defaulting to `""`, no enum (model lists drift — Codex especially).
+  Non-empty → passed as `--model <value>` on the next run.
+- **Model reaches every spawn path (scope B).** All four arg builders in
+  `shared/claudeArgs.js` (`buildClaudeArgs`, `buildInteractiveClaudeArgs`,
+  `buildInteractiveCodexArgs`, `buildHeadlessCodexArgs`) append `--model <value>`
+  as two argv elements — never shell-interpolated, so a hostile value stays inert
+  — positioned before the verbatim `claudeExtraArgs` / `codexExtraArgs` (both CLIs
+  are last-wins, so an explicit `--model` in extra args still wins). `extension.js`
+  plumbs the settings into the interactive pty and the headless feed for both
+  backends.
+- **A `model: <label> ▾` control in the Run header (scope C).** Next to the backend
+  switcher, one per active backend. Click → a quick-pick (Claude Code:
+  Default / Sonnet / Opus / Haiku / Opus Plan / Custom…; Codex: Default / Custom…)
+  that writes the Global setting. The extension computes `{ label, value, options }`
+  from a pure helper (`shared/modelPick.js`) into the poll snapshot; the webview
+  carries no model-list logic (same discipline as the v1.2 guideline chip).
+  Changing the model never restarts a running session — it applies to the next spawn.
+- **The model is shown where a run is (scope D).** The headless run header line
+  names a non-default model so a saved transcript is unambiguous; a `live-codex`
+  room's info card shows the model `shared/codexSessions.js` already parses from
+  `session_meta`.
+
 ## 1.2.0
 
 Codex becomes a true equal of Claude Code inside Agentyard. Everything is

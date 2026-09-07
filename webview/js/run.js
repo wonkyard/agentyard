@@ -102,6 +102,7 @@
     const meta = document.getElementById('run-meta');
     const hint = document.getElementById('run-hint');
     const backendSwitch = document.getElementById('run-backend-switch-feed');
+    const modelPickEl = document.getElementById('run-model-pick-feed');
     if (!feed || !input) return;
 
     const cfg = root.AY_CONFIG || {};
@@ -185,6 +186,7 @@
           btn.classList.toggle('on', btn.dataset.backend === id);
         }
       }
+      if (AY.modelpick && AY.modelpick.refresh) AY.modelpick.refresh();
       input.placeholder = placeholderFor(id);
       updateMeta();
     }
@@ -231,6 +233,11 @@
           break;
         case 'started':
           addPrompt(msg.prompt, msg.resumed);
+          // scope D: a non-default model is named in the run header so a saved
+          // transcript is unambiguous about which model answered.
+          if (msg.model) {
+            addLine({ cls: 'ln-system', text: (BACKEND_LABEL[msg.backend] || msg.backend || '') + '  ·  ' + msg.model });
+          }
           setRunning(true);
           break;
         case 'item':
@@ -302,6 +309,12 @@
         backendSwitch.appendChild(b);
       }
       input.placeholder = placeholderFor(backend);
+    }
+
+    // scope C: the model control reflects/sets the active backend's model
+    // setting. One per active backend — here it follows `backend`.
+    if (modelPickEl && AY.modelpick && AY.modelpick.attach) {
+      AY.modelpick.attach(modelPickEl, () => backend);
     }
 
     if (adapter.onRun) adapter.onRun(handle);

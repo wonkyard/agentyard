@@ -275,7 +275,9 @@
         kind: 'live-codex',
         title: a.name,
         subtitle: a.leaving ? 'ended' : (a.status === 'blocked' ? 'blocked' : 'session'),
-        model: 'codex',
+        // scope D: the model shared/codexSessions.js parsed from session_meta,
+        // or the generic 'codex' when the transcript never named one.
+        model: a.model || 'codex',
         source: 'codex',
         occupants: [liveOccupant(a)],
         overflow: 0,
@@ -312,7 +314,9 @@
   function liveOccupant(a) {
     return {
       name: a.name,
-      model: a.kind === 'main' ? 'main' : a.type,
+      // scope D: a Codex occupant shows the model parsed from its rollout's
+      // session_meta on the info card; Claude live agents keep the subagent type.
+      model: a.kind === 'codex' ? (a.model || 'codex') : (a.kind === 'main' ? 'main' : a.type),
       status: a.status,
       note: a.doing,
       doing: a.doing,

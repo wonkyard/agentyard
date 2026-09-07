@@ -18,6 +18,7 @@ const { toDepartments } = require('../shared/frontmatter.js');
 const hooksConfig = require('../shared/hooksConfig.js');
 const { buildClaudeArgs, buildInteractiveClaudeArgs, buildInteractiveCodexArgs, buildHeadlessCodexArgs, candidateCommands } = require('../shared/claudeArgs.js');
 const guidelines = require('../shared/guidelines.js');
+const modelPick = require('../shared/modelPick.js');
 const codexSessions = require('../shared/codexSessions.js');
 const { CodexExecParser } = require('../shared/codexExec.js');
 const { needsCmdWrap, parseCmdShim, tokenizeCmdLine, resolveLauncher } = require('../shared/winWrap.js');
@@ -108,7 +109,7 @@ win.window = win;
 // The host injects the real version + platform into AY_CONFIG (from package.json).
 const PKG = JSON.parse(fs.readFileSync(path.join(EXT_ROOT, 'package.json'), 'utf8'));
 win.AY_CONFIG = { version: PKG.version, platform: 'linux' };
-for (const f of ['js/palette.js', 'js/sprites.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/termclip.js', 'js/run.js', 'js/term.js']) {
+for (const f of ['js/palette.js', 'js/sprites.js', 'js/live.js', 'js/model.js', 'js/render.js', 'js/termclip.js', 'js/modelpick.js', 'js/run.js', 'js/term.js']) {
   const code = fs.readFileSync(path.join(EXT_ROOT, 'webview', f), 'utf8');
   new Function('window', 'self', 'globalThis', 'module', 'document', code)(win, win, win, undefined, win.document);
 }
@@ -189,7 +190,7 @@ check('run-view config props declared',
   !!cfgProps['agentyard.claudePermissionMode']);
 check('claudePermissionMode default is not a skip-permissions mode',
   cfgProps['agentyard.claudePermissionMode'].default === 'default');
-check('package version is 1.2.0', pkg.version === '1.2.0', pkg.version);
+check('package version is 1.3.0', pkg.version === '1.3.0', pkg.version);
 
 // --- 5b. v0.5 terminal: manifest wiring ---------------------------------
 check('runView config prop: enum terminal|headless, default terminal',
@@ -810,7 +811,7 @@ check('retainContextWhenHidden set',
 
 // --- 16. v1.0.0: manifest + extension wiring for clipboard/attach ----
 {
-  check('manifest: version is exactly 1.2.0', pkg.version === '1.2.0');
+  check('manifest: version is exactly 1.3.0', pkg.version === '1.3.0');
   check('manifest: keywords include "claude code" and "terminal"',
     Array.isArray(pkg.keywords) && pkg.keywords.includes('claude code') && pkg.keywords.includes('terminal'));
   check('manifest: galleryBanner is set (dark, #1e1e2e)',
@@ -1276,8 +1277,8 @@ check('retainContextWhenHidden set',
     check('manifest: command ' + c + ' declared', cmds22.includes(c));
   }
   const props22 = Object.keys((((pkg.contributes || {}).configuration || {}).properties) || {});
-  check('manifest: v1.1 settings keys (16 prior + agents/codexPath/codexExtraArgs)',
-    props22.length === 19 &&
+  check('manifest: settings keys (19 through v1.2 + claudeModel/codexModel in v1.3 = 21)',
+    props22.length === 21 &&
     ['agentyard.agents', 'agentyard.codexPath', 'agentyard.codexExtraArgs'].every((k) => props22.includes(k)),
     props22.length + ' keys');
 
@@ -1731,12 +1732,9 @@ check('retainContextWhenHidden set',
 
 // --- 28. v1.2: manifest version + CHANGELOG ---------------------------
 {
-  check('v1.2: package.json version is 1.2.0', pkg.version === '1.2.0', pkg.version);
   check('v1.2: agentyard.agents still defaults to ["claude-code"], no keys renamed',
     JSON.stringify((((pkg.contributes || {}).configuration || {}).properties || {})['agentyard.agents'].default) ===
       JSON.stringify(['claude-code']));
-  const props12 = Object.keys((((pkg.contributes || {}).configuration || {}).properties) || {});
-  check('v1.2: no new config keys added (still 19)', props12.length === 19, props12.length + ' keys');
   const changelog = fs.readFileSync(path.join(EXT_ROOT, 'CHANGELOG.md'), 'utf8');
   check('v1.2: CHANGELOG has a 1.2.0 section mentioning Codex office rooms / headless / sync chip',
     /##\s*1\.2\.0/.test(changelog) &&
@@ -1745,6 +1743,148 @@ check('retainContextWhenHidden set',
   const vsig = fs.readFileSync(path.join(EXT_ROOT, '.vscodeignore'), 'utf8');
   check('v1.2: .vscodeignore still excludes dev-data/*.jsonl (codex fixtures stay local)',
     /^dev-data\/\*\.jsonl\s*$/m.test(vsig));
+}
+
+// --- 29. v1.3: per-backend model picker (scope A–D) ------------------
+{
+  const extSrc = fs.readFileSync(path.join(EXT_ROOT, 'extension.js'), 'utf8');
+  const cp13 = (((pkg.contributes || {}).configuration || {}).properties) || {};
+
+  // -- A. settings: claudeModel / codexModel, string, default "", no enum -----
+  for (const key of ['agentyard.claudeModel', 'agentyard.codexModel']) {
+    check('A/manifest: ' + key + ' is a string defaulting to "" with no enum',
+      cp13[key] && cp13[key].type === 'string' && cp13[key].default === '' && !cp13[key].enum);
+  }
+  const props13 = Object.keys(cp13);
+  check('A/manifest: config key count is 21 (19 through v1.2 + the two model keys)',
+    props13.length === 21, props13.length + ' keys');
+
+  // -- B. arg wiring: --model in all four builders, two elements, before extra --
+  {
+    const ch = buildClaudeArgs({ prompt: 'x', model: 'opus', extraArgs: ['--allowedTools', 'Read'] });
+    const mi = ch.args.indexOf('--model');
+    check('B/claudeArgs: `--model opus` present as two argv elements, before extraArgs',
+      mi !== -1 && ch.args[mi + 1] === 'opus' && mi < ch.args.indexOf('--allowedTools'));
+    check('B/claudeArgs: empty / whitespace model adds no --model',
+      !buildClaudeArgs({ prompt: 'x', model: '' }).args.includes('--model') &&
+      !buildClaudeArgs({ prompt: 'x', model: '   ' }).args.includes('--model'));
+    check('B/claudeArgs: a hostile model value stays a single argv element',
+      (() => { const a = buildClaudeArgs({ prompt: 'x', model: '; rm -rf /' }).args;
+        return a[a.indexOf('--model') + 1] === '; rm -rf /'; })());
+
+    const ic = buildInteractiveClaudeArgs({ permissionMode: 'plan', model: 'haiku', extraArgs: ['--foo'] });
+    check('B/interactiveClaudeArgs: --model after --permission-mode, before extraArgs',
+      ic.args.join(' ') === '--permission-mode plan --model haiku --foo');
+    check('B/interactiveClaudeArgs: no model -> unchanged (no --model)',
+      !buildInteractiveClaudeArgs({ model: '' }).args.includes('--model'));
+
+    const cx = buildInteractiveCodexArgs({ model: 'gpt-5.2-codex', extraArgs: ['--sandbox', 'ro'] });
+    check('B/interactiveCodexArgs: top-level `--model <name>` first, before codexExtraArgs',
+      cx.args.join(' ') === '--model gpt-5.2-codex --sandbox ro');
+    check('B/interactiveCodexArgs: empty model -> no flag, extra args intact',
+      buildInteractiveCodexArgs({ model: '  ', extraArgs: ['--sandbox', 'ro'] }).args.join(' ') === '--sandbox ro');
+    check('B/interactiveCodexArgs: hostile model stays one element',
+      buildInteractiveCodexArgs({ model: 'a" & rm -rf /' }).args[1] === 'a" & rm -rf /');
+
+    const hc = buildHeadlessCodexArgs({ prompt: 'do x', model: 'gpt-5.2-codex', extraArgs: ['--flag'] });
+    check('B/headlessCodexArgs: `--model` sits after --json, before codexExtraArgs; prompt still its own element',
+      JSON.stringify(hc.args) === JSON.stringify(['exec', 'do x', '--json', '--model', 'gpt-5.2-codex', '--flag']));
+    check('B/headlessCodexArgs: resume keeps `exec` first, prompt its own element, --model before extra',
+      JSON.stringify(buildHeadlessCodexArgs({ prompt: 'go', resumeId: 'r1', model: 'm' }).args) ===
+        JSON.stringify(['exec', 'resume', 'r1', 'go', '--json', '--model', 'm']));
+    check('B/headlessCodexArgs: empty model -> byte-identical to v1.2 shape',
+      JSON.stringify(buildHeadlessCodexArgs({ prompt: 'go', model: '' }).args) ===
+        JSON.stringify(['exec', 'go', '--json']));
+  }
+
+  // -- B. extension.js plumbing: config -> all four spawn paths --------------
+  check('B/extension: interactive builders receive claudeModel / codexModel from config',
+    /buildInteractiveClaudeArgs\(\{[\s\S]{0,240}model: cfg\.get\('claudeModel', ''\)/.test(extSrc) &&
+    /buildInteractiveCodexArgs\(\{[\s\S]{0,200}model: cfg\.get\('codexModel', ''\)/.test(extSrc));
+  check('B/extension: headless RunController.send passes both model strings',
+    /buildHeadlessCodexArgs\(\{[\s\S]{0,240}model: cfg\.get\('codexModel', ''\)/.test(extSrc) &&
+    /buildClaudeArgs\(\{[\s\S]{0,320}model: cfg\.get\('claudeModel', ''\)/.test(extSrc));
+
+  // -- C. the pure picker-state helper -------------------------------------
+  {
+    const cEmpty = modelPick.pickerState('claude-code', {});
+    check('C/pickerState: empty -> label "default", value ""', cEmpty.label === 'default' && cEmpty.value === '');
+    check('C/pickerState: set -> label is the value',
+      modelPick.pickerState('claude-code', { claudeModel: 'opus' }).label === 'opus' &&
+      modelPick.pickerState('codex', { codexModel: 'gpt-5.2-codex' }).value === 'gpt-5.2-codex');
+    check('C/pickerState: whitespace value is trimmed away to default',
+      modelPick.pickerState('claude-code', { claudeModel: '  ' }).label === 'default');
+    const cOpts = modelPick.pickerState('claude-code', {}).options;
+    check('C/pickerState: Claude options are the 5 aliases + Custom…',
+      cOpts.length === 6 &&
+      JSON.stringify(cOpts.map((o) => o.id)) === JSON.stringify(['default', 'sonnet', 'opus', 'haiku', 'opusplan', 'custom']) &&
+      cOpts[cOpts.length - 1].custom === true);
+    const xOpts = modelPick.pickerState('codex', {}).options;
+    check('C/pickerState: Codex options are Default + Custom… only',
+      xOpts.length === 2 && xOpts[0].id === 'default' && xOpts[1].custom === true);
+    check('C/pickerState: backend is normalised; unknown -> claude-code',
+      modelPick.pickerState('codex', {}).backend === 'codex' &&
+      modelPick.pickerState('whatever', {}).backend === 'claude-code');
+    check('C/modelPick.settingKey: maps to the right config key',
+      modelPick.settingKey('codex') === 'agentyard.codexModel' &&
+      modelPick.settingKey('claude-code') === 'agentyard.claudeModel');
+  }
+
+  // -- C. snapshot + webview wiring (no model list in the webview) ---------
+  check('C/extension: collectSnapshot carries per-backend model state from the pure helper',
+    /model: modelPickSnapshot\(cfg\)/.test(extSrc) &&
+    /modelPick\.pickerState\('claude-code', values\)/.test(extSrc) &&
+    /modelPick\.pickerState\('codex', values\)/.test(extSrc));
+  check('C/extension: the modelPick click intent is handled + writes the Global setting',
+    /msg\.action === 'modelPick'/.test(extSrc) &&
+    /function modelPickCommand\(/.test(extSrc) &&
+    /cfg\.update\(key, value \|\| '', vscode\.ConfigurationTarget\.Global\)/.test(extSrc));
+  const idxHtml13 = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'index.html'), 'utf8');
+  check('C/webview: #run-model-pick element in index.html and getHtml',
+    /id="run-model-pick"/.test(idxHtml13) && /id="run-model-pick"/.test(extSrc));
+  const modelPickSrc = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'modelpick.js'), 'utf8');
+  check('C/webview: modelpick.js renders the label + posts modelPick, carries no model list',
+    /action: 'modelPick'/.test(modelPickSrc) && !/sonnet|opusplan|CLAUDE_OPTIONS/.test(modelPickSrc));
+  const mainSrc13 = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'main.js'), 'utf8');
+  check('C/webview: main.js forwards the poll snapshot model to the control',
+    /AY\.modelpick\.onData\(raw\.model\)/.test(mainSrc13));
+  const devSrc13 = fs.readFileSync(path.join(EXT_ROOT, 'scripts', 'dev-server.mjs'), 'utf8');
+  check('C/dev-server: /api/agents carries a model stub built by the pure helper',
+    /model: devModel\(\)/.test(devSrc13) && /modelPick\.pickerState\(/.test(devSrc13));
+
+  // -- D. surface the model where a run is shown --------------------------
+  check('D/extension: the headless run header line carries the configured model',
+    /event: 'started'[\s\S]{0,120}model: runModel/.test(extSrc));
+  const runSrc13 = fs.readFileSync(path.join(EXT_ROOT, 'webview', 'js', 'run.js'), 'utf8');
+  check('D/run.js: a non-default model is named in the run header on started',
+    /if \(msg\.model\)/.test(runSrc13));
+
+  // -- Claude-only byte-identical regression ------------------------------
+  {
+    const officeNoModel = win.AY.model.build({ departments, teamRoles, dataMode: 'demo' }, { projects, statuses });
+    const officeWithSnap = win.AY.model.build(
+      { departments, teamRoles, dataMode: 'demo', model: { 'claude-code': modelPick.pickerState('claude-code', {}), codex: modelPick.pickerState('codex', {}) } },
+      { projects, statuses }
+    );
+    check('regression: model.build ignores the picker snapshot — Claude-only scene byte-identical',
+      JSON.stringify(officeNoModel) === JSON.stringify(officeWithSnap));
+    const L = win.AY.live;
+    const nowMs = Date.parse('2026-09-07T12:00:10Z');
+    const evs = [
+      { ts: '2026-09-07T12:00:00Z', hook_event_name: 'SessionStart', session_id: 'r1', cwd: '/w/app' },
+      { ts: '2026-09-07T12:00:05Z', hook_event_name: 'PreToolUse', session_id: 'r1', cwd: '/w/app', tool_name: 'Edit', tool_input_summary: 'a.ts' },
+    ];
+    const a1 = L.resolve(evs, { nowMs, codexEvents: [] });
+    const a2 = L.resolve(evs, { nowMs });
+    check('regression: live.resolve Claude-only output is stable and carries no codex/model rooms',
+      JSON.stringify(a1) === JSON.stringify(a2) && a1.agents.every((ag) => ag.kind !== 'codex'));
+  }
+
+  // -- CHANGELOG + version -----------------------------------------------
+  const changelog13 = fs.readFileSync(path.join(EXT_ROOT, 'CHANGELOG.md'), 'utf8');
+  check('v1.3: CHANGELOG has a 1.3.0 section mentioning the model picker',
+    /##\s*1\.3\.0/.test(changelog13) &&
+    /model/i.test(changelog13.split('## 1.3.0')[1].split('\n## ')[0]));
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

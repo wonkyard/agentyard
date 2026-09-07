@@ -20,7 +20,9 @@ setting (default `["claude-code"]`) picks which; the first-run wizard offers a
 checkbox per CLI with a "found / not found" line. An existing install behaves
 exactly as before until you change it. Codex reads `AGENTS.md`; Claude Code
 reads `CLAUDE.md`. Settings: `agentyard.codexPath` (default `codex`),
-`agentyard.codexExtraArgs` (verbatim — Agentyard maps no Codex flags itself).
+`agentyard.codexModel` (free-text, default `""` — set from the Run-header model
+picker), `agentyard.codexExtraArgs` (verbatim — Agentyard maps no other Codex
+flags itself).
 
 ### Keeping the guideline files in sync
 
@@ -77,10 +79,19 @@ reads images by path. `agentyard.keepAttachments` (default `false`) clears that
 folder on Run-view init and **New thread**; `agentyard.maxAttachmentMB` (default
 `10`) caps a single paste/drop.
 
+**Model picker.** The Run header has a `model: <label> ▾` control next to the
+backend switcher. It sets `agentyard.claudeModel` / `agentyard.codexModel`
+(default `""` — Agentyard passes no `--model` flag, so the CLI's own default /
+config wins). Claude Code offers the stable aliases (`sonnet` / `opus` / `haiku`
+/ `opusplan`) plus **Custom…**; Codex is free-text only, since its model names
+drift. Changing the model applies to the next run, not a session already open.
+
 Settings: `agentyard.claudePath` (default `claude`), `agentyard.runView`
-(`terminal` | `headless`, default `terminal`), `agentyard.claudeExtraArgs`
-(appended verbatim, e.g. `["--model", "opus"]`), `agentyard.claudePermissionMode`
-(default `default`; `plan` starts the session in plan mode). On Windows the CLI
+(`terminal` | `headless`, default `terminal`), `agentyard.claudeModel` /
+`agentyard.codexModel` (default `""`; set from the Run-header picker),
+`agentyard.claudeExtraArgs` (appended verbatim, e.g. `["--allowedTools", "Read Edit"]`),
+`agentyard.claudePermissionMode` (default `default`; `plan` starts the session in
+plan mode). On Windows the CLI
 is resolved to a real executable and spawned with no shell — `cmd.exe` is never
 invoked (see *How it's built*). Nothing about the session is written to disk by
 Agentyard.

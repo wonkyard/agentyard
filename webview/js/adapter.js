@@ -71,8 +71,9 @@
           codexEvents: live.codexEvents || [], // scope E: browser dev stub
           hooksInstalled: !!live.hooksInstalled,
           nowMs: Date.now(),
-          staleWorkingHours: agents.staleWorkingHours, // optional; model defaults to 3h
+          staleWorkingHours: agents.staleWorkingHours, // optional; office model defaults to 3h
           guideline: agents.guideline || null, // scope G: dev-server chip stub
+          model: agents.model || null, // scope C: dev-server model-picker stub
         };
       },
     };
@@ -141,6 +142,7 @@
         hasWorkspace: !!msg.hasWorkspace,
         agents: Array.isArray(msg.agents) ? msg.agents : ['claude-code'],
         guideline: msg.guideline || null,
+        model: msg.model || null, // scope C: per-backend model-picker state
       };
       const w = waiters;
       waiters = [];

@@ -195,6 +195,23 @@ html, body {
   padding: 3px 9px;
   cursor: pointer;
 }
+/* v1.3 model picker — a small `model: <label> ▾` button, styled like the
+   backend switcher. One in the terminal foot, one in the headless feed foot. */
+.run-model-pick {
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 9px;
+  padding: 3px 9px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.run-model-pick[hidden] { display: none; }
+.run-model-pick:hover { color: var(--text); border-color: #3d465f; }
+.run-model-pick[data-default="no"] { color: #2ec4b6; border-color: #21514c; }
 #run-term-meta { font-size: 9px; color: var(--dim); }
 
 /* 📎 attach button — subtle, on both the terminal foot and the headless input row */

@@ -23,11 +23,25 @@ function cleanStr(v) {
 }
 
 /**
+ * `--model <value>` as two argv elements when the backend's model string is a
+ * non-empty trimmed string, or [] otherwise. The value is passed verbatim as its
+ * own element — never shell-interpolated, never split — so a hostile value (e.g.
+ * `; rm -rf`) stays inert. Both CLIs treat `--model` as last-wins, so a user who
+ * also puts `--model X` in claudeExtraArgs / codexExtraArgs still wins by being
+ * appended after this.
+ */
+function modelArgs(v) {
+  const m = cleanStr(v);
+  return m ? ['--model', m] : [];
+}
+
+/**
  * @param {object} opts
  * @param {string} [opts.claudePath]     configured binary name/path (default "claude")
  * @param {string} opts.prompt           the user's prompt (kept verbatim)
  * @param {string|null} [opts.resume]    session id to continue, or falsy for a fresh thread
  * @param {string} [opts.permissionMode] one of PERMISSION_MODES
+ * @param {string} [opts.model]          agentyard.claudeModel — `--model <value>` when non-empty
  * @param {string[]} [opts.extraArgs]    verbatim extra argv (e.g. ["--allowedTools","Read Edit"])
  * @returns {{command:string, args:string[], prompt:string}}
  */
@@ -47,6 +61,9 @@ function buildClaudeArgs(opts) {
 
   const resume = cleanStr(opts.resume);
   if (resume) args.push('--resume', resume);
+
+  // model flag goes after the built-in flags, before the verbatim extra args.
+  args.push(...modelArgs(opts.model));
 
   const extra = Array.isArray(opts.extraArgs) ? opts.extraArgs : [];
   for (const a of extra) {
@@ -71,6 +88,7 @@ function buildClaudeArgs(opts) {
  * @param {object} opts
  * @param {string} [opts.claudePath]     configured binary name/path (default "claude")
  * @param {string} [opts.permissionMode] one of PERMISSION_MODES
+ * @param {string} [opts.model]          agentyard.claudeModel — `--model <value>` when non-empty
  * @param {string[]} [opts.extraArgs]    verbatim extra argv
  * @returns {{command:string, args:string[]}}
  */
@@ -85,6 +103,8 @@ function buildInteractiveClaudeArgs(opts) {
     }
     args.push('--permission-mode', mode);
   }
+
+  args.push(...modelArgs(opts.model));
 
   const extra = Array.isArray(opts.extraArgs) ? opts.extraArgs : [];
   for (const a of extra) {
@@ -108,12 +128,14 @@ function buildInteractiveClaudeArgs(opts) {
  *
  * @param {object} opts
  * @param {string} [opts.codexPath]   configured binary name/path (default "codex")
+ * @param {string} [opts.model]       agentyard.codexModel — top-level `--model <value>` when non-empty
  * @param {string[]} [opts.extraArgs] verbatim extra argv, appended in order
  * @returns {{command:string, args:string[]}}
  */
 function buildInteractiveCodexArgs(opts) {
   opts = opts || {};
-  const args = [];
+  // codex takes --model at the top level; keep it before the verbatim extra args.
+  const args = modelArgs(opts.model);
   const extra = Array.isArray(opts.extraArgs) ? opts.extraArgs : [];
   for (const a of extra) {
     if (typeof a === 'string' && a.length) args.push(a);
@@ -142,6 +164,7 @@ function buildInteractiveCodexArgs(opts) {
  * @param {string} [opts.codexPath]     configured binary name/path (default "codex")
  * @param {string} opts.prompt          the user's prompt (kept verbatim)
  * @param {string|null} [opts.resumeId] rollout/session id to continue, or falsy for a fresh run
+ * @param {string} [opts.model]         agentyard.codexModel — `--model <value>` when non-empty
  * @param {string[]} [opts.extraArgs]   verbatim extra argv, appended in order
  * @returns {{command:string, args:string[], prompt:string}}
  */
@@ -155,6 +178,9 @@ function buildHeadlessCodexArgs(opts) {
   const args = ['exec'];
   if (resumeId) args.push('resume', resumeId);
   args.push(prompt, '--json');
+
+  // model flag sits with the other `codex exec` flags, before codexExtraArgs.
+  args.push(...modelArgs(opts.model));
 
   const extra = Array.isArray(opts.extraArgs) ? opts.extraArgs : [];
   for (const a of extra) {

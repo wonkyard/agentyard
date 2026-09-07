@@ -17,6 +17,7 @@ const {
 const { needsCmdWrap, resolveLauncher } = require('./shared/winWrap.js');
 const claudeResolve = require('./shared/claudeResolve.js');
 const guidelines = require('./shared/guidelines.js');
+const modelPick = require('./shared/modelPick.js');
 const codexSessions = require('./shared/codexSessions.js');
 const { StreamJsonParser } = require('./shared/streamJson.js');
 const { CodexExecParser } = require('./shared/codexExec.js');
@@ -60,6 +61,7 @@ const BACKENDS = {
       return buildInteractiveClaudeArgs({
         claudePath: cfg.get('claudePath', 'claude'),
         permissionMode: cfg.get('claudePermissionMode', 'default'),
+        model: cfg.get('claudeModel', ''),
         extraArgs: cfg.get('claudeExtraArgs', []),
       });
     },
@@ -74,6 +76,7 @@ const BACKENDS = {
     buildInteractiveArgs(cfg) {
       return buildInteractiveCodexArgs({
         codexPath: cfg.get('codexPath', 'codex'),
+        model: cfg.get('codexModel', ''),
         extraArgs: cfg.get('codexExtraArgs', []),
       });
     },
@@ -807,6 +810,7 @@ class RunController {
           codexPath: cfg.get('codexPath', 'codex'),
           prompt,
           resumeId: resume ? this.sessionId : null,
+          model: cfg.get('codexModel', ''),
           extraArgs: cfg.get('codexExtraArgs', []),
         });
       } else {
@@ -815,6 +819,7 @@ class RunController {
           prompt,
           resume: resume ? this.sessionId : null,
           permissionMode: cfg.get('claudePermissionMode', 'default'),
+          model: cfg.get('claudeModel', ''),
           extraArgs: cfg.get('claudeExtraArgs', []),
         });
       }
@@ -823,6 +828,9 @@ class RunController {
       return;
     }
 
+    // scope D: surface the configured model in the feed's run header line.
+    const runModel = (this.backendId === 'codex'
+      ? cfg.get('codexModel', '') : cfg.get('claudeModel', '')) || '';
     const candidates = candidateCommands(built.command, process.platform);
     this.parser = this.backendId === 'codex' ? new CodexExecParser() : new StreamJsonParser();
     this.stderrBuf = '';
@@ -832,6 +840,7 @@ class RunController {
       event: 'started',
       prompt,
       backend: this.backendId,
+      model: runModel,
       resumed: !!(resume && this.sessionId),
       resumeId: resume ? this.sessionId : null,
     });
@@ -1180,7 +1189,7 @@ function getHtml(webview, extUri, context) {
 
   const scripts = ['vendor/sql-wasm.js', 'vendor/xterm.js', 'vendor/xterm-addon-fit.js',
     'js/palette.js', 'js/sprites.js', 'js/db.js', 'js/adapter.js', 'js/live.js', 'js/model.js',
-    'js/render.js', 'js/termclip.js', 'js/run.js', 'js/term.js', 'js/onboard.js', 'js/main.js']
+    'js/render.js', 'js/termclip.js', 'js/modelpick.js', 'js/run.js', 'js/term.js', 'js/onboard.js', 'js/main.js']
     .map((s) => `<script nonce="${n}" src="${asset(...s.split('/'))}"></script>`)
     .join('\n  ');
 
@@ -1218,6 +1227,7 @@ function getHtml(webview, extUri, context) {
       <div id="run-term" hidden></div>
       <div id="run-term-foot" hidden>
         <span id="run-backend-switch" hidden></span>
+        <button type="button" id="run-model-pick" class="run-model-pick" hidden></button>
         <button type="button" id="run-term-attach" class="attach-btn" title="Attach a file or image">📎 Attach</button>
         <button type="button" id="run-term-new">New thread</button>
         <span id="run-term-meta"></span>
@@ -1233,6 +1243,7 @@ function getHtml(webview, extUri, context) {
         </div>
         <div id="run-foot">
           <span id="run-backend-switch-feed" hidden></span>
+          <button type="button" id="run-model-pick-feed" class="run-model-pick" hidden></button>
           <button type="button" id="run-new">New thread</button>
           <span id="run-meta"></span>
         </div>
@@ -1280,11 +1291,30 @@ function collectSnapshot(live, codexLive) {
     userRosterCount: readAgentDir(USER_AGENTS_DIR).length,
     agents: enabledAgents(),
     guideline: guidelineState(p.root),
+    // scope C: per-backend model picker state — the pure helper decides
+    // label / value / options; the webview just renders it and posts a
+    // `modelPick` intent (same discipline as the guideline chip).
+    model: modelPickSnapshot(cfg),
   };
   // scope E: only carry codexEvents when Codex is an enabled backend — a
   // Claude-Code-only install gets no key at all, so the scene is unchanged.
   if (codexEnabled && codexLive) snap.codexEvents = codexLive.recent();
   return snap;
+}
+
+// scope C: `{ 'claude-code': {label,value,options}, codex: {…} }` for the Run-view
+// model picker. Both backends always present — the webview shows the one for the
+// active backend. Values come straight from settings; the pure helper owns the
+// option lists so no model list ever lives in the webview.
+function modelPickSnapshot(cfg) {
+  const values = {
+    claudeModel: cfg.get('claudeModel', ''),
+    codexModel: cfg.get('codexModel', ''),
+  };
+  return {
+    'claude-code': modelPick.pickerState('claude-code', values),
+    codex: modelPick.pickerState('codex', values),
+  };
 }
 
 // Presence + sync state of the enabled backends' instruction files at the
@@ -1700,6 +1730,10 @@ class OfficeViewProvider {
       } else {
         vscode.commands.executeCommand('agentyard.setupGuidelines');
       }
+    } else if (msg.action === 'modelPick') {
+      // scope C: the Run-header model control was clicked — pick / type a model
+      // for the given backend and write it to the Global setting.
+      modelPickCommand(this, msg.backend);
     } else if (msg.action === 'openExternal' && msg.url) {
       try { vscode.env.openExternal(vscode.Uri.parse(String(msg.url))); } catch (e) { /* ignore */ }
     } else if (msg.action === 'liveMode') {
@@ -2035,6 +2069,58 @@ async function syncGuidelinesCommand(provider, mode) {
     return;
   }
   vscode.window.showInformationMessage('CLAUDE.md now points at AGENTS.md. A backup was saved.');
+  if (provider) provider.pushData();
+}
+
+// scope C: the Run-header `model: <label> ▾` control was clicked. Show a quick
+// pick of the backend's options (aliases for Claude Code, just Default/Custom…
+// for Codex), then write the chosen value to agentyard.<backend>Model (Global).
+// `Custom…` opens an input box pre-filled with the current value. Changing the
+// model never restarts a running session — it applies to the next spawn.
+async function modelPickCommand(provider, backendId) {
+  const cfg = vscode.workspace.getConfiguration('agentyard');
+  const state = modelPick.pickerState(backendId, {
+    claudeModel: cfg.get('claudeModel', ''),
+    codexModel: cfg.get('codexModel', ''),
+  });
+  const key = modelPick.settingKey(backendId);
+  const backendName = state.backend === 'codex' ? 'Codex' : 'Claude Code';
+
+  const items = state.options.map((o) => ({
+    label: o.label,
+    description: o.custom ? (state.value ? 'current: ' + state.value : '') : undefined,
+    picked: !o.custom && o.value === state.value,
+    option: o,
+  }));
+  const chosen = await vscode.window.showQuickPick(items, {
+    title: backendName + ' model',
+    placeHolder: 'Model passed as --model on the next run (blank = CLI/config default)',
+  });
+  if (!chosen) return;
+
+  let value;
+  if (chosen.option.custom) {
+    const typed = await vscode.window.showInputBox({
+      title: backendName + ' model',
+      prompt: state.backend === 'codex'
+        ? 'Codex model name (e.g. a gpt-5.x / *-codex name — varies by auth)'
+        : 'Claude Code model alias or full model id',
+      value: state.value,
+      ignoreFocusOut: true,
+    });
+    if (typed == null) return; // cancelled — leave the setting as-is
+    value = typed.trim();
+  } else {
+    value = chosen.option.value || '';
+  }
+
+  await cfg.update(key, value || '', vscode.ConfigurationTarget.Global);
+  const runningNow = provider && ((provider.run && provider.run.running) ||
+    (provider.terms && provider.terms.get(state.backend) && provider.terms.get(state.backend).pty));
+  vscode.window.showInformationMessage(
+    (value ? backendName + ' model set to "' + value + '".' : backendName + ' model cleared — using the CLI/config default.') +
+    (runningNow ? ' Applies to the next run.' : '')
+  );
   if (provider) provider.pushData();
 }
 
