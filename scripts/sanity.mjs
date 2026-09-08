@@ -191,7 +191,7 @@ check('run-view config props declared',
   !!cfgProps['agentyard.claudePermissionMode']);
 check('claudePermissionMode default is not a skip-permissions mode',
   cfgProps['agentyard.claudePermissionMode'].default === 'default');
-check('package version is 1.4.0', pkg.version === '1.4.0', pkg.version);
+check('package version is 1.4.1', pkg.version === '1.4.1', pkg.version);
 
 // --- 5b. v0.5 terminal: manifest wiring ---------------------------------
 check('runView config prop: enum terminal|headless, default terminal',
@@ -812,7 +812,7 @@ check('retainContextWhenHidden set',
 
 // --- 16. v1.0.0: manifest + extension wiring for clipboard/attach ----
 {
-  check('manifest: version is exactly 1.4.0', pkg.version === '1.4.0');
+  check('manifest: version is exactly 1.4.1', pkg.version === '1.4.1');
   check('manifest: keywords include "claude code" and "terminal"',
     Array.isArray(pkg.keywords) && pkg.keywords.includes('claude code') && pkg.keywords.includes('terminal'));
   check('manifest: galleryBanner is set (dark, #1e1e2e)',
@@ -1610,20 +1610,20 @@ check('retainContextWhenHidden set',
 {
   // -- buildHeadlessCodexArgs: `codex exec <prompt> --json`, prompt one arg
   const fresh = buildHeadlessCodexArgs({ prompt: 'add a test for parseFoo' });
-  check('F/args: fresh run is `codex exec <prompt> --json`, prompt a single arg',
+  check('F/args: fresh run is `codex exec --json -- <prompt>`, prompt a single arg',
     fresh.command === 'codex' &&
-    JSON.stringify(fresh.args) === JSON.stringify(['exec', 'add a test for parseFoo', '--json']));
+    JSON.stringify(fresh.args) === JSON.stringify(['exec', '--json', '--', 'add a test for parseFoo']));
   const hostile = buildHeadlessCodexArgs({ prompt: 'say "hi" & echo done' });
   check('F/args: a prompt with shell metachars stays ONE argv element (not split, not quoted)',
-    hostile.args[1] === 'say "hi" & echo done' && hostile.args.length === 3);
+    hostile.args[3] === 'say "hi" & echo done' && hostile.args.length === 4);
   const resumed = buildHeadlessCodexArgs({
     codexPath: 'codex.cmd', prompt: 'keep going', resumeId: 'roll-9',
     extraArgs: ['--model', 'gpt-5-codex', '', 42],
   });
-  check('F/args: resume -> `codex exec resume <id> <prompt> --json`, extra args verbatim + ordered, non-strings dropped',
+  check('F/args: resume -> `codex exec resume --json [options] -- <id> <prompt>`, extra args verbatim + ordered, non-strings dropped',
     resumed.command === 'codex.cmd' &&
     JSON.stringify(resumed.args) ===
-      JSON.stringify(['exec', 'resume', 'roll-9', 'keep going', '--json', '--model', 'gpt-5-codex']));
+      JSON.stringify(['exec', 'resume', '--json', '--model', 'gpt-5-codex', '--', 'roll-9', 'keep going']));
   check('F/args: no Claude-only flags (-p / --output-format / --print)',
     !resumed.args.includes('-p') && !resumed.args.includes('--output-format') && !resumed.args.includes('--print'));
   check('F/args: falsy resumeId adds no `resume` subcommand',
@@ -1791,13 +1791,13 @@ check('retainContextWhenHidden set',
 
     const hc = buildHeadlessCodexArgs({ prompt: 'do x', model: 'gpt-5.2-codex', extraArgs: ['--flag'] });
     check('B/headlessCodexArgs: `--model` sits after --json, before codexExtraArgs; prompt still its own element',
-      JSON.stringify(hc.args) === JSON.stringify(['exec', 'do x', '--json', '--model', 'gpt-5.2-codex', '--flag']));
+      JSON.stringify(hc.args) === JSON.stringify(['exec', '--json', '--model', 'gpt-5.2-codex', '--flag', '--', 'do x']));
     check('B/headlessCodexArgs: resume keeps `exec` first, prompt its own element, --model before extra',
       JSON.stringify(buildHeadlessCodexArgs({ prompt: 'go', resumeId: 'r1', model: 'm' }).args) ===
-        JSON.stringify(['exec', 'resume', 'r1', 'go', '--json', '--model', 'm']));
-    check('B/headlessCodexArgs: empty model -> byte-identical to v1.2 shape',
+        JSON.stringify(['exec', 'resume', '--json', '--model', 'm', '--', 'r1', 'go']));
+    check('B/headlessCodexArgs: empty model -> only JSON streaming flags and prompt separator',
       JSON.stringify(buildHeadlessCodexArgs({ prompt: 'go', model: '' }).args) ===
-        JSON.stringify(['exec', 'go', '--json']));
+        JSON.stringify(['exec', '--json', '--', 'go']));
   }
 
   // -- B. extension.js plumbing: config -> all four spawn paths --------------
@@ -2049,6 +2049,8 @@ check('retainContextWhenHidden set',
   check('v1.4 regression: model.build output identical (handoff touches neither model.js nor live.js)',
     JSON.stringify(officeA) === JSON.stringify(officeB) && !/handoff/i.test(JSON.stringify(officeA)));
 }
+
+await (await import('./sanity-codex-store.mjs')).runCodexStoreChecks(check);
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 process.exitCode = failures === 0 ? 0 : 1;

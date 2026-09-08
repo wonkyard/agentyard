@@ -2,6 +2,18 @@
 
 All notable changes to Agentyard are recorded here.
 
+## 1.4.1
+
+- Codex office rooms and cross-agent handoff now read the versioned local SQLite
+  thread store, with the existing rollout JSONL source as fallback. No network,
+  new dependency, or changes to the Codex store.
+- SQLite reads use read-only snapshots of checkpointed data: an active turn may
+  appear after Codex checkpoints its last completed turn. WAL files are never read.
+- Headless Codex prompts now follow `--` so leading dashes are treated literally,
+  including resumed sessions (verified against CLI 0.153.4).
+- Preserve in-place item updates, normalize Windows extended paths, and skip
+  malformed records. Claude-only installs never open the Codex database reader.
+
 ## 1.4.0
 
 Cross-agent handoff ("이어받기"). You work in one coding agent, hit a session

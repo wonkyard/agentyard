@@ -20,6 +20,7 @@ const guidelines = require('./shared/guidelines.js');
 const handoff = require('./shared/handoff.js');
 const modelPick = require('./shared/modelPick.js');
 const codexSessions = require('./shared/codexSessions.js');
+const codexStore = require('./shared/codexStore.js');
 const { StreamJsonParser } = require('./shared/streamJson.js');
 const { CodexExecParser } = require('./shared/codexExec.js');
 const { killTree, spawnGroupOpts } = require('./shared/killTree.js');
@@ -622,6 +623,156 @@ class CodexSessionLog {
 
   recent() {
     return this.events.length > 1500 ? this.events.slice(-1500) : this.events;
+  }
+}
+
+
+// SQLite is primary when it contains usable thread history; older installs keep
+// the rollout tailer. Only instantiate this reader when Codex is enabled.
+class CodexDbReader {
+  constructor(dir = path.join(os.homedir(), '.codex')) {
+    this.dir = dir;
+    this.sql = null;
+    this.busy = null;
+    this.events = [];
+    this.threads = new Map();
+    this.databaseKey = '';
+  }
+
+  async snapshot(read) {
+    const opened = [];
+    try {
+      if (!fs.existsSync(this.dir)) return null;
+      const files = fs.readdirSync(this.dir).filter((name) => /^(state|thread_history)_\d+\.sqlite$/.test(name))
+        .map((name) => ({ name, mtime: fs.statSync(path.join(this.dir, name)).mtimeMs }));
+      const state = codexStore.pickDatabase(files, 'state');
+      const history = codexStore.pickDatabase(files, 'thread_history');
+      if (!state || !history) return null;
+      if (!this.sql) {
+        // Load the shipped runtime, not the devDependency excluded from VSIX.
+        const initSqlJs = require('./webview/vendor/sql-wasm.js');
+        this.sql = initSqlJs({ locateFile: (name) => path.join(__dirname, 'webview', 'vendor', name) });
+      }
+      const SQL = await this.sql;
+      for (const f of [state, history]) {
+        // Read-only checkpoint snapshots. sql.js cannot see a live -wal; the
+        // scene/digest can lag until Codex checkpoints its last completed turn.
+        // Never open, checkpoint, or write the live store or its WAL ourselves.
+        opened.push(new SQL.Database(fs.readFileSync(path.join(this.dir, f.name))));
+      }
+      return read(opened[0], opened[1], state.name + '/' + history.name);
+    } catch (e) {
+      this.sql = null; // an initialization failure may recover on the next poll
+      return undefined; // caller retains the previous successful snapshot
+    } finally {
+      for (const db of opened) db.close();
+    }
+  }
+
+  rows(db, sql, params = []) {
+    const stmt = db.prepare(sql);
+    try {
+      stmt.bind(params);
+      const out = [];
+      while (stmt.step()) out.push(stmt.getAsObject());
+      return out;
+    } finally { stmt.free(); }
+  }
+
+  threadRows(db, cap) {
+    const columns = new Set(this.rows(db, 'PRAGMA table_info(threads)').map((r) => r.name));
+    if (!columns.has('id') || !columns.has('cwd')) return [];
+    const names = ['id', 'cwd', 'title', 'model', 'first_user_message', 'archived',
+      'updated_at_ms', 'created_at_ms', 'updated_at', 'created_at'];
+    const select = names.map((n) => columns.has(n) ? n : 'NULL AS ' + n).join(',');
+    const order = columns.has('updated_at_ms') ? 'COALESCE(updated_at_ms,' +
+      (columns.has('updated_at') ? 'updated_at*1000' : '0') + ')' : columns.has('updated_at') ? 'updated_at' : 'id';
+    return this.rows(db, 'SELECT ' + select + ' FROM threads' +
+      (columns.has('archived') ? ' WHERE archived=0' : '') + ' ORDER BY ' + order + ' DESC' +
+      (cap ? ' LIMIT ' + cap : ''));
+  }
+
+  lastTurn(db, id) {
+    return this.rows(db, 'SELECT * FROM thread_turns WHERE thread_id=? ORDER BY rollout_ordinal DESC LIMIT 1', [id])[0];
+  }
+
+  async poll() {
+    if (this.busy) return this.busy;
+    this.busy = this.snapshot((state, history, key) => {
+      const next = new Map();
+      const events = [];
+      const itemColumns = new Set(this.rows(history, 'PRAGMA table_info(thread_items)').map((r) => r.name));
+      for (const thread of codexStore.normalizeThreads(this.threadRows(state, CODEX_FILE_CAP))) {
+        const turn = this.lastTurn(history, thread.session_id);
+        if (!turn) continue; // metadata-only legacy rows do not hide JSONL sessions
+        const prev = key === this.databaseKey ? this.threads.get(thread.session_id) : null;
+        const latest = this.rows(history, 'SELECT MAX(rollout_ordinal) AS ordinal FROM thread_items WHERE thread_id=?',
+          [thread.session_id])[0];
+        const reuse = prev && Number(latest.ordinal) >= prev.ordinal;
+        const ordinal = reuse ? prev.ordinal : -1;
+        const updated = reuse ? prev.updated : -1;
+        // Items can be edited in place (streamed text, command completion). The
+        // running store has updated_at_ordinal; older schemas re-read the last turn.
+        const delta = this.rows(history, 'SELECT * FROM thread_items WHERE thread_id=? AND (rollout_ordinal>? OR ' +
+          (itemColumns.has('updated_at_ordinal') ? 'updated_at_ordinal>?' : 'turn_id=?') +
+          ') ORDER BY rollout_ordinal DESC LIMIT 250',
+        [thread.session_id, ordinal, itemColumns.has('updated_at_ordinal') ? updated : turn.turn_id]).reverse();
+        const items = new Map(reuse ? prev.items : []);
+        for (const row of delta) items.set(row.turn_id + '/' + row.item_id, row);
+        const sorted = Array.from(items.values()).sort((a, b) => a.rollout_ordinal - b.rollout_ordinal).slice(-250);
+        const evs = codexStore.normalizeItems(sorted.map((r) => Object.assign({}, r, { cwd: thread.cwd })));
+        const ts = thread.updated_ms || thread.created_ms;
+        events.push({ ts: ts ? new Date(ts).toISOString() : null, source: 'codex', session_id: thread.session_id,
+          cwd: thread.cwd, model: thread.model, kind: 'meta', doing: null, ended: false });
+        events.push(...evs.filter((e) => e.role !== 'user'));
+        const lastMs = sorted.reduce((n, r) => Math.max(n, Number(r.created_at_ms) || 0), 0);
+        // Real stores use epoch seconds for turn timestamps, but milliseconds
+        // for items. Account for the second's precision when comparing them.
+        const rawCompleted = Number(turn.completed_at) || 0;
+        const completed = rawCompleted < 1e12 ? rawCompleted * 1000 : rawCompleted;
+        const ended = turn.status === 'completed' && (!completed ||
+          completed + (rawCompleted < 1e12 ? 999 : 0) >= lastMs);
+        if (ended) {
+          const endedMs = Math.max(completed, lastMs, completed ? 0 : ts);
+          events.push({ ts: endedMs ? new Date(endedMs).toISOString() : null, source: 'codex',
+            session_id: thread.session_id, cwd: thread.cwd, model: null, kind: 'ended', doing: null, ended: true });
+        }
+        next.set(thread.session_id, { ended, activityMs: Math.max(lastMs, ts), items: new Map(sorted.map((r) => [r.turn_id + '/' + r.item_id, r])),
+          ordinal: Number(latest.ordinal) || 0,
+          updated: Math.max(updated, ...delta.map((r) => Number(r.updated_at_ordinal) || 0)) });
+      }
+      return { threads: next, events, key };
+    }).then((result) => {
+      if (result !== undefined) {
+        this.threads = result ? result.threads : new Map();
+        this.events = result ? result.events : [];
+        this.databaseKey = result ? result.key : '';
+      }
+    }).finally(() => { this.busy = null; });
+    return this.busy;
+  }
+
+  recent() { return this.events; }
+
+  hasLiveThreads(nowMs = Date.now(), staleMinutes = 15) {
+    return Array.from(this.threads.values()).some((t) => !t.ended &&
+      (!staleMinutes || nowMs - t.activityMs <= staleMinutes * 60000));
+  }
+
+  async handoff(root, maxTurns = 20) {
+    return this.snapshot((state, history) => {
+      const want = codexStore.normalizePath(root);
+      const thread = codexStore.normalizeThreads(this.threadRows(state)).find((r) =>
+        want && codexStore.normalizePath(r.cwd) === want);
+      if (!thread) return null;
+      const turns = this.rows(history, 'SELECT turn_id FROM thread_turns WHERE thread_id=? ORDER BY rollout_ordinal DESC LIMIT ?',
+        [thread.session_id, Math.max(1, Math.min(100, Math.floor(maxTurns) || 20))]);
+      if (!turns.length) return null;
+      const rows = this.rows(history, 'SELECT * FROM thread_items WHERE thread_id=? AND turn_id IN (' +
+        turns.map(() => '?').join(',') + ') ORDER BY rollout_ordinal', [thread.session_id, ...turns.map((t) => t.turn_id)]);
+      const entries = codexStore.normalizeItems(rows.map((r) => Object.assign({}, r, { cwd: thread.cwd })));
+      return entries.length ? entries : null;
+    });
   }
 }
 
@@ -1515,6 +1666,7 @@ class OfficeViewProvider {
     this.live = new LiveLog(() => this.pushData());
     // scope E: Codex rollout tailer, polled on the same tick as `live` (pushData).
     this.codexLive = new CodexSessionLog();
+    this.codexDb = null; // lazy: Claude-only installs never construct/open the DB reader
     this.run = new RunController((m) => {
       if (this.view) this.view.webview.postMessage(m);
     });
@@ -1537,14 +1689,22 @@ class OfficeViewProvider {
     this.terms.clear();
   }
 
-  pushData() {
+  async pushData() {
     if (!this.view) return;
-    // scope E: poll the Codex tailer on the same tick — only when Codex is
-    // enabled, so a Claude-Code-only install never touches ~/.codex.
-    if (this.codexLive && enabledAgents().indexOf('codex') !== -1) {
-      try { this.codexLive.poll(); } catch (e) { /* inert on any fs hiccup */ }
+    let codexSource = this.codexLive;
+    if (enabledAgents().indexOf('codex') !== -1) {
+      if (!this.codexDb) this.codexDb = new CodexDbReader();
+      await this.codexDb.poll();
+      if (this.codexDb.hasLiveThreads(Date.now(),
+        vscode.workspace.getConfiguration('agentyard').get('staleMinutes', 15))) codexSource = this.codexDb;
+      else {
+        try { this.codexLive.poll(); } catch (e) { /* inert on any fs hiccup */ }
+        // Historical DB rows must not hide a current JSONL-only session; a
+        // migrated id still belongs to the DB, even when its last turn ended.
+        codexSource = { recent: () => this.codexLive.recent().filter((e) => !this.codexDb.threads.has(e.session_id)) };
+      }
     }
-    this.view.webview.postMessage(collectSnapshot(this.live, this.codexLive));
+    if (this.view) this.view.webview.postMessage(collectSnapshot(this.live, codexSource));
   }
 
   post(msg) {
@@ -1900,7 +2060,7 @@ function activate(context) {
   const provider = new OfficeViewProvider(context);
   maybeSeedAgents(context);
   provider.live.start();
-  provider.codexLive.start();
+  if (enabledAgents().indexOf('codex') !== -1) provider.codexLive.start();
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('agentyard.office', provider, {
@@ -2300,18 +2460,22 @@ async function handoffCommand(provider, arg) {
     /* non-fatal — the context handoff is the point */
   }
 
-  const transcript = from === 'codex'
+  let entries = null;
+  if (from === 'codex') {
+    const reader = (provider && provider.codexDb) || new CodexDbReader();
+    entries = await reader.handoff(root, 20);
+  }
+  const transcript = entries ? null : from === 'codex'
     ? findCodexTranscript(root)
     : findClaudeTranscript(root, provider && provider.live);
-  if (!transcript) {
+  if (!entries && !transcript) {
     vscode.window.showInformationMessage(
       'No recent ' + label(from) + ' session in this workspace to hand off from.');
     return;
   }
 
-  let entries;
   try {
-    entries = fs.readFileSync(transcript, 'utf8').split('\n').filter((l) => l.trim());
+    if (!entries) entries = fs.readFileSync(transcript, 'utf8').split('\n').filter((l) => l.trim());
   } catch (e) {
     vscode.window.showWarningMessage(
       'Agentyard could not read the ' + label(from) + ' transcript: ' + e.message);
